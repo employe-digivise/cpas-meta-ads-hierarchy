@@ -1,0 +1,24 @@
+# ── Credentials & Secrets ─────────────────────────────────────────
+# JANGAN pernah commit file-file ini
+execution/.env
+Modal & Deployment/.venv/pyvenv.cfg
+.env
+.env.local
+*.env
+
+# ── Python ────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+
+# ── Node.js ───────────────────────────────────────────────────────
+node_modules/
+dist/
+*.js.map
+
+# ── OS / Editor ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/settings.json
