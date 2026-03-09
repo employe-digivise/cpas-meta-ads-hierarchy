@@ -33,7 +33,7 @@ def main() -> None:
     # ── Step 1: Config ────────────────────────────────────────
     print("[1/3] Memuat config ...")
     cfg = load_config()
-    require(cfg, "MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "META_ACCESS_TOKEN", "API_AUTH_TOKEN")
+    require(cfg, "MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "META_ACCESS_TOKEN", "API_AUTH_TOKEN", "N8N_WEBHOOK_URL")
 
     modal_env = {
         **os.environ,
@@ -51,6 +51,11 @@ def main() -> None:
     run(
         ["modal", "secret", "create", "--force",
          "api-auth-token", f"API_AUTH_TOKEN={cfg['API_AUTH_TOKEN']}"],
+        env=modal_env,
+    )
+    run(
+        ["modal", "secret", "create", "--force",
+         "n8n-webhook-url", f"N8N_WEBHOOK_URL={cfg['N8N_WEBHOOK_URL']}"],
         env=modal_env,
     )
 
