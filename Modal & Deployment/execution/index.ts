@@ -71,6 +71,19 @@ app.post("/api/meta-ads/fetch", requireSecret, async (req: Request, res: Respons
       return;
     }
 
+    if (date) {
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+      if (!dateRegex.test(date)) {
+        res.status(400).json({ error: `Format date tidak valid: '${date}'. Gunakan format YYYY-MM-DD (contoh: 2026-03-08)` });
+        return;
+      }
+      const parsed = new Date(date + "T00:00:00Z");
+      if (isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) {
+        res.status(400).json({ error: `Tanggal tidak valid: '${date}'. Pastikan tanggal benar (contoh: 2026-03-08)` });
+        return;
+      }
+    }
+
     // 2. Resolve brand → account_id, brand_id
     const brandInfo = resolveBrand(brand_name);
 

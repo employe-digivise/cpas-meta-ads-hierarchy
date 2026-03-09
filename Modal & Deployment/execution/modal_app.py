@@ -66,14 +66,57 @@ async def fetch_meta_ads(data: dict, authorization: str = Header(...)):
     brand_id = brand_info["brand_id"]
 
     # ── Tanggal ───────────────────────────────────────────────
+    import re
     date_str = data.get("date")
-    if not date_str:
+    if date_str:
+        date_str = date_str.strip()
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_str):
+            raise HTTPException(status_code=400, detail=f"Format date tidak valid: '{date_str}'. Gunakan format YYYY-MM-DD (contoh: 2026-03-08)")
+        try:
+            datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Tanggal tidak valid: '{date_str}'. Pastikan tanggal benar (contoh: 2026-03-08)")
+    else:
         jakarta_tz = timezone(timedelta(hours=7))
         date_str = (datetime.now(jakarta_tz) - timedelta(days=1)).strftime("%Y-%m-%d")
 
     # ── Meta API setup ────────────────────────────────────────
     access_token = os.environ.get("META_ACCESS_TOKEN")
     api_version = "v21.0"
+
+    # ── Helper: single request with retry ─────────────────────
+    async def fetch_with_retry(client, url, max_retries=3):
+        """Fetch URL dengan exponential backoff untuk transient errors."""
+        for attempt in range(max_retries):
+            try:
+                resp = await client.get(url, timeout=30.0)
+                if resp.status_code == 200:
+                    return resp
+                # Retry pada rate limit (429) dan server error (5xx)
+                if resp.status_code in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
+                    wait = (2 ** attempt) + 0.5
+                    await asyncio.sleep(wait)
+                    continue
+                # Client error atau final attempt → raise
+                if resp.status_code >= 300:
+                    body = resp.json()
+                    if "error" in body:
+                        err = body["error"]
+                        raise Exception(f"Meta API Error ({err.get('code')}): {err.get('message')}")
+                raise Exception(f"Meta API HTTP {resp.status_code}: {resp.text}")
+            except httpx.TimeoutException:
+                if attempt < max_retries - 1:
+                    wait = (2 ** attempt) + 0.5
+                    await asyncio.sleep(wait)
+                    continue
+                raise Exception(f"Meta API timeout setelah {max_retries} percobaan")
+            except httpx.ConnectError:
+                if attempt < max_retries - 1:
+                    wait = (2 ** attempt) + 0.5
+                    await asyncio.sleep(wait)
+                    continue
+                raise Exception(f"Meta API connection error setelah {max_retries} percobaan")
+        raise Exception("Unexpected retry loop exit")
 
     # ── Helper: paginated fetch ───────────────────────────────
     async def fetch_all_pages(client, url):
@@ -84,14 +127,7 @@ async def fetch_meta_ads(data: dict, authorization: str = Header(...)):
         while next_url:
             if page >= max_pages:
                 raise Exception(f"Pagination melebihi batas {max_pages} halaman. Kemungkinan loop tak terbatas.")
-            resp = await client.get(next_url, timeout=30.0)
-            if resp.status_code != 200:
-                if resp.status_code >= 300:
-                    body = resp.json()
-                    if "error" in body:
-                        err = body["error"]
-                        raise Exception(f"Meta API Error ({err.get('code')}): {err.get('message')}")
-                raise Exception(f"Meta API HTTP {resp.status_code}: {resp.text}")
+            resp = await fetch_with_retry(client, next_url)
             body = resp.json()
             results.extend(body.get("data", []))
             next_url = body.get("paging", {}).get("next")

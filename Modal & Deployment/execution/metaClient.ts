@@ -82,6 +82,46 @@ interface MetaPagedResponse<T> {
   paging?: { next?: string };
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+
+async function fetchWithRetry<T>(url: string, maxRetries = 3): Promise<MetaPagedResponse<T>> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const res = await axios.get<MetaPagedResponse<T>>(url);
+      return res.data;
+    } catch (err) {
+      const axiosErr = err as AxiosError<{ error?: { message: string; code: number } }>;
+      const status = axiosErr.response?.status;
+      const metaError = axiosErr.response?.data?.error;
+
+      // Retry pada rate limit (429) dan server error (5xx)
+      if (status && RETRYABLE_STATUS.has(status) && attempt < maxRetries - 1) {
+        const wait = (2 ** attempt) * 1000 + 500;
+        console.log(`[MetaClient] Retry ${attempt + 1}/${maxRetries} after ${wait}ms (HTTP ${status})`);
+        await sleep(wait);
+        continue;
+      }
+
+      // Retry pada network/timeout error
+      if (!axiosErr.response && attempt < maxRetries - 1) {
+        const wait = (2 ** attempt) * 1000 + 500;
+        console.log(`[MetaClient] Retry ${attempt + 1}/${maxRetries} after ${wait}ms (network error)`);
+        await sleep(wait);
+        continue;
+      }
+
+      if (metaError) {
+        throw new Error(`Meta API Error (${metaError.code}): ${metaError.message}`);
+      }
+
+      throw err;
+    }
+  }
+  throw new Error("Unexpected retry loop exit");
+}
+
 async function fetchAllPages<T>(url: string, maxPages = 50): Promise<T[]> {
   const results: T[] = [];
   let nextUrl: string | null = url;
@@ -92,27 +132,14 @@ async function fetchAllPages<T>(url: string, maxPages = 50): Promise<T[]> {
       throw new Error(`Pagination melebihi batas ${maxPages} halaman. Kemungkinan loop tak terbatas.`);
     }
 
-    try {
-      const res = await axios.get<MetaPagedResponse<T>>(nextUrl);
-      const body: MetaPagedResponse<T> = res.data;
+    const body: MetaPagedResponse<T> = await fetchWithRetry<T>(nextUrl);
 
-      if (Array.isArray(body.data)) {
-        results.push(...body.data);
-      }
-
-      nextUrl = body.paging?.next ?? null;
-      page++;
-    } catch (err) {
-      const axiosErr = err as AxiosError<{ error?: { message: string; code: number } }>;
-      const metaError = axiosErr.response?.data?.error;
-
-      if (metaError) {
-        // Jika error dari Meta API (misalnya token expired, rate limit)
-        throw new Error(`Meta API Error (${metaError.code}): ${metaError.message}`);
-      }
-
-      throw err;
+    if (Array.isArray(body.data)) {
+      results.push(...body.data);
     }
+
+    nextUrl = body.paging?.next ?? null;
+    page++;
   }
 
   return results;
