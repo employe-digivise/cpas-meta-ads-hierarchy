@@ -5,7 +5,9 @@ Endpoint HTTP + Cron scheduler harian.
 
 Endpoint: POST /fetch_meta_ads
   Input:  { "brand_name": "ATRIA" }
-  Output: Array of normalized ad rows (1 row = 1 ad, 1 hari)
+         atau dengan date range:
+         { "brand_name": "ATRIA", "date_start": "2026-02-01", "date_end": "2026-02-28" }
+  Output: Array of normalized ad rows (1 row = 1 ad per date range)
 
 Cron: daily_fetch_all_brands
   Jadwal: 07:00 WIB (00:00 UTC) setiap hari
@@ -114,39 +116,61 @@ async def get_token_expiry(client, access_token):
         return {"days_left": None, "expires_on": None}
 
 
-async def fetch_all_data(account_id, access_token, date_str):
-    """Fetch insights, adsets, ads, dan token expiry secara parallel."""
+async def fetch_all_data(account_id, access_token, date_start, date_end=None, is_range=False):
+    """Fetch insights, adsets, ads, dan token expiry secara parallel.
+
+    Args:
+        date_start: Tanggal awal (YYYY-MM-DD)
+        date_end: Tanggal akhir (YYYY-MM-DD). Jika None, sama dengan date_start (single day).
+        is_range: Jika True, fetch di level=campaign (tanpa adset/ad breakdown).
+    """
     import asyncio
     import httpx
     import json
 
-    base = f"https://graph.facebook.com/{API_VERSION}/{account_id}"
-    time_range = json.dumps({"since": date_str, "until": date_str})
+    if date_end is None:
+        date_end = date_start
 
-    insights_url = (
-        f"{base}/insights?level=ad&fields=campaign_id,campaign_name,adset_id,adset_name,"
-        f"ad_id,ad_name,spend,reach,frequency,impressions,inline_link_clicks,cpm,"
-        f"inline_link_click_ctr,cost_per_inline_link_click,"
-        f"catalog_segment_value,catalog_segment_actions"
-        f"&time_range={time_range}&time_zone=Asia/Jakarta&limit=500&access_token={access_token}"
-    )
-    adsets_url = (
-        f"{base}/adsets?fields=id,name,optimization_goal,promoted_object,campaign_id"
-        f"&limit=500&access_token={access_token}"
-    )
-    ads_filter = json.dumps([{"field": "effective_status", "operator": "IN", "value": ["ACTIVE"]}])
-    ads_url = (
-        f"{base}/ads?fields=id,name,adset_id,campaign_id,effective_status,"
-        f"creative{{thumbnail_url,image_url}}"
-        f"&filtering={ads_filter}&limit=500&access_token={access_token}"
-    )
+    base = f"https://graph.facebook.com/{API_VERSION}/{account_id}"
+    time_range = json.dumps({"since": date_start, "until": date_end})
+
+    if is_range:
+        insights_url = (
+            f"{base}/insights?level=campaign&fields=campaign_id,campaign_name,"
+            f"spend,reach,frequency,impressions,inline_link_clicks,cpm,"
+            f"inline_link_click_ctr,cost_per_inline_link_click,"
+            f"catalog_segment_value,catalog_segment_actions"
+            f"&time_range={time_range}&time_zone=Asia/Jakarta&limit=500&access_token={access_token}"
+        )
+    else:
+        insights_url = (
+            f"{base}/insights?level=ad&fields=campaign_id,campaign_name,adset_id,adset_name,"
+            f"ad_id,ad_name,spend,reach,frequency,impressions,inline_link_clicks,cpm,"
+            f"inline_link_click_ctr,cost_per_inline_link_click,"
+            f"catalog_segment_value,catalog_segment_actions"
+            f"&time_range={time_range}&time_zone=Asia/Jakarta&limit=500&access_token={access_token}"
+        )
 
     async with httpx.AsyncClient() as client:
-        insights, adsets, ads = await asyncio.gather(
-            fetch_all_pages(client, insights_url),
-            fetch_all_pages(client, adsets_url),
-            fetch_all_pages(client, ads_url),
-        )
+        if is_range:
+            insights = await fetch_all_pages(client, insights_url)
+            adsets, ads = [], []
+        else:
+            adsets_url = (
+                f"{base}/adsets?fields=id,name,optimization_goal,promoted_object,campaign_id"
+                f"&limit=500&access_token={access_token}"
+            )
+            ads_filter = json.dumps([{"field": "effective_status", "operator": "IN", "value": ["ACTIVE"]}])
+            ads_url = (
+                f"{base}/ads?fields=id,name,adset_id,campaign_id,effective_status,"
+                f"creative{{thumbnail_url,image_url}}"
+                f"&filtering={ads_filter}&limit=500&access_token={access_token}"
+            )
+            insights, adsets, ads = await asyncio.gather(
+                fetch_all_pages(client, insights_url),
+                fetch_all_pages(client, adsets_url),
+                fetch_all_pages(client, ads_url),
+            )
         token_info = await get_token_expiry(client, access_token)
     return insights, adsets, ads, token_info
 
@@ -169,8 +193,64 @@ def _resolve_objective(adset):
     return _clean_objective(raw)
 
 
-def build_rows(brand_name, brand_id, date_str, insights, adsets, ads):
-    """Normalize & merge data menjadi rows. 1 row = 1 ad, 1 hari."""
+def build_rows(brand_name, brand_id, date_start, insights, adsets, ads, date_end=None, is_range=False):
+    """Normalize & merge data menjadi rows.
+
+    Jika is_range=True: 1 row = 1 campaign (level campaign).
+    Jika is_range=False: 1 row = 1 ad (level ad).
+    """
+    if date_end is None:
+        date_end = date_start
+
+    # ── Campaign-level (date range) ──────────────────────────
+    if is_range:
+        rows = []
+        for entry in insights:
+            atc_value = 0.0
+            purchase_value = 0.0
+            for v in (entry.get("catalog_segment_value") or []):
+                if v.get("action_type") == "add_to_cart":
+                    atc_value = _to_num(v.get("value"))
+                elif v.get("action_type") == "purchase":
+                    purchase_value = _to_num(v.get("value"))
+
+            atc_qty = 0.0
+            purchase_qty = 0.0
+            for v in (entry.get("catalog_segment_actions") or []):
+                if v.get("action_type") == "add_to_cart":
+                    atc_qty = _to_num(v.get("value"))
+                elif v.get("action_type") == "purchase":
+                    purchase_qty = _to_num(v.get("value"))
+
+            spend = _to_num(entry.get("spend"))
+            roas = purchase_value / spend if spend > 0 else 0.0
+
+            rows.append({
+                "brand": brand_name, "brand_id": brand_id,
+                "date_start": date_start, "date_stop": date_end,
+                "campaign_id": entry.get("campaign_id"),
+                "campaign_name": entry.get("campaign_name", "N/A"),
+                "adset_id": None, "adset_name": None,
+                "ad_id": None, "ad_name": None,
+                "objective": None,
+                "spend": spend, "reach": _to_num(entry.get("reach")),
+                "frequency": _to_num(entry.get("frequency")),
+                "impressions": _to_num(entry.get("impressions")),
+                "link_click": _to_num(entry.get("inline_link_clicks")),
+                "cpm": _to_num(entry.get("cpm")),
+                "ctr": _to_num(entry.get("inline_link_click_ctr")),
+                "cpc": _to_num(entry.get("cost_per_inline_link_click")),
+                "atc_value": atc_value, "purchase_value": purchase_value,
+                "atc_qty": atc_qty, "purchase_qty": purchase_qty,
+                "roas": roas,
+                "status": "OK",
+                "_status": "N/A",
+                "thumbnail_url": None,
+                "image_url": None,
+            })
+        return rows
+
+    # ── Ad-level (single date) ───────────────────────────────
     adset_map = {a["id"]: a for a in adsets}
     ads_map = {a["id"]: a for a in ads}
     campaign_name_map = {}
@@ -214,7 +294,7 @@ def build_rows(brand_name, brand_id, date_str, insights, adsets, ads):
 
         rows.append({
             "brand": brand_name, "brand_id": brand_id,
-            "date_start": date_str, "date_stop": date_str,
+            "date_start": date_start, "date_stop": date_end,
             "campaign_id": entry.get("campaign_id"),
             "campaign_name": entry.get("campaign_name", "N/A"),
             "adset_id": entry.get("adset_id"),
@@ -245,7 +325,7 @@ def build_rows(brand_name, brand_id, date_str, insights, adsets, ads):
         creative = ad.get("creative", {})
         rows.append({
             "brand": brand_name, "brand_id": brand_id,
-            "date_start": date_str, "date_stop": date_str,
+            "date_start": date_start, "date_stop": date_end,
             "campaign_id": ad.get("campaign_id"),
             "campaign_name": campaign_name_map.get(ad.get("campaign_id"), "N/A"),
             "adset_id": ad.get("adset_id"),
@@ -298,24 +378,50 @@ async def fetch_meta_ads(data: dict, authorization: str = Header(...)):
     brand_id = brand_info["brand_id"]
 
     # ── Tanggal ───────────────────────────────────────────────
-    date_str = data.get("date")
-    if date_str:
-        date_str = date_str.strip()
-        if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_str):
-            raise HTTPException(status_code=400, detail=f"Format date tidak valid: '{date_str}'. Gunakan format YYYY-MM-DD (contoh: 2026-03-08)")
+    # Support 3 mode:
+    #   1. date_start + date_end → range (misal 1 bulan penuh)
+    #   2. date → single day (backward compatible)
+    #   3. kosong → kemarin (default)
+    def _validate_date(value, field_name):
+        value = value.strip()
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", value):
+            raise HTTPException(status_code=400, detail=f"Format {field_name} tidak valid: '{value}'. Gunakan format YYYY-MM-DD (contoh: 2026-03-08)")
         try:
-            datetime.strptime(date_str, "%Y-%m-%d")
+            return datetime.strptime(value, "%Y-%m-%d")
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"Tanggal tidak valid: '{date_str}'. Pastikan tanggal benar (contoh: 2026-03-08)")
+            raise HTTPException(status_code=400, detail=f"Tanggal {field_name} tidak valid: '{value}'. Pastikan tanggal benar (contoh: 2026-03-08)")
+
+    date_start_raw = data.get("date_start")
+    date_end_raw = data.get("date_end")
+    date_raw = data.get("date")
+
+    if date_start_raw:
+        dt_start = _validate_date(date_start_raw, "date_start")
+        if date_end_raw:
+            dt_end = _validate_date(date_end_raw, "date_end")
+        else:
+            dt_end = dt_start
+        if dt_end < dt_start:
+            raise HTTPException(status_code=400, detail=f"date_end ({date_end_raw}) tidak boleh lebih awal dari date_start ({date_start_raw})")
+        if (dt_end - dt_start).days > 93:
+            raise HTTPException(status_code=400, detail="Range maksimal 93 hari (± 3 bulan) untuk menghindari timeout Meta API")
+        date_start = dt_start.strftime("%Y-%m-%d")
+        date_end = dt_end.strftime("%Y-%m-%d")
+    elif date_raw:
+        _validate_date(date_raw, "date")
+        date_start = date_raw.strip()
+        date_end = date_start
     else:
         jakarta_tz = timezone(timedelta(hours=7))
-        date_str = (datetime.now(jakarta_tz) - timedelta(days=1)).strftime("%Y-%m-%d")
+        date_start = (datetime.now(jakarta_tz) - timedelta(days=1)).strftime("%Y-%m-%d")
+        date_end = date_start
 
     # ── Fetch & build ─────────────────────────────────────────
+    is_range = (date_start != date_end)
     access_token = os.environ.get("META_ACCESS_TOKEN")
     try:
         insights, adsets, ads, token_info = await asyncio.to_thread(
-            asyncio.run, fetch_all_data(account_id, access_token, date_str)
+            asyncio.run, fetch_all_data(account_id, access_token, date_start, date_end, is_range=is_range)
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
@@ -329,15 +435,17 @@ async def fetch_meta_ads(data: dict, authorization: str = Header(...)):
         elif days_left <= 14:
             token_warning = f"Token Meta expired {days_left} hari lagi ({token_info.get('expires_on')}). Segera jalankan rotate_token.py"
 
-    rows = build_rows(brand_name, brand_id, date_str, insights, adsets, ads)
+    rows = build_rows(brand_name, brand_id, date_start, insights, adsets, ads, date_end, is_range=is_range)
     total_ok = sum(1 for r in rows if r["_status"] == "OK")
 
     return {
         "success": True,
         "brand": brand_name,
         "brand_id": brand_id,
-        "date": date_str,
-        "total_ads": len(rows),
+        "date_start": date_start,
+        "date_end": date_end,
+        "level": "campaign" if is_range else "ad",
+        "total_campaigns" if is_range else "total_ads": len(rows),
         "total_with_insight": total_ok,
         "total_no_insight": len(rows) - total_ok,
         "token_days_left": days_left,

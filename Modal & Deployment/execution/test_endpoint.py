@@ -8,10 +8,14 @@ Urutan:
   4. Print summary
 
 Usage:
-  python execution/test_endpoint.py [brand_name] [date]
+  python execution/test_endpoint.py [brand_name] [date_start] [date_end]
 
   brand_name : default ATRIA
-  date       : default kemarin (YYYY-MM-DD)
+  date_start : default kemarin (YYYY-MM-DD)
+  date_end   : optional, jika diisi maka fetch range (YYYY-MM-DD)
+
+Contoh:
+  python execution/test_endpoint.py ATRIA 2026-02-01 2026-02-28
 """
 import json
 import sys
@@ -30,11 +34,13 @@ def yesterday_jakarta() -> str:
 
 
 def main() -> None:
-    brand = sys.argv[1] if len(sys.argv) > 1 else "ATRIA"
-    date  = sys.argv[2] if len(sys.argv) > 2 else yesterday_jakarta()
+    brand      = sys.argv[1] if len(sys.argv) > 1 else "ATRIA"
+    date_start = sys.argv[2] if len(sys.argv) > 2 else yesterday_jakarta()
+    date_end   = sys.argv[3] if len(sys.argv) > 3 else None
 
     # ── Step 1: Config ───────────────────────────────────────
-    print(f"[1/3] Config  : brand={brand}, date={date}")
+    date_label = f"{date_start} → {date_end}" if date_end else date_start
+    print(f"[1/3] Config  : brand={brand}, date={date_label}")
     cfg = load_config()
     require(cfg, "MODAL_ENDPOINT_URL", "API_AUTH_TOKEN")
 
@@ -43,7 +49,10 @@ def main() -> None:
 
     # ── Step 2: Request ──────────────────────────────────────
     print(f"[2/3] Request : POST {url}")
-    payload = json.dumps({"brand_name": brand, "date": date}).encode()
+    payload_dict = {"brand_name": brand, "date_start": date_start}
+    if date_end:
+        payload_dict["date_end"] = date_end
+    payload = json.dumps(payload_dict).encode()
     req = urllib.request.Request(
         url,
         data=payload,
@@ -55,7 +64,7 @@ def main() -> None:
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             body = json.loads(resp.read())
     except urllib.error.HTTPError as e:
         raw = e.read().decode()
@@ -78,7 +87,8 @@ def main() -> None:
     print()
     print("=" * 40)
     print(f"  Brand            : {body.get('brand')}")
-    print(f"  Date             : {body.get('date')}")
+    print(f"  Date start       : {body.get('date_start')}")
+    print(f"  Date end         : {body.get('date_end')}")
     print(f"  Total ads        : {total}")
     print(f"  Dengan insight   : {with_ins}")
     print(f"  NO_INSIGHT       : {no_ins}")
