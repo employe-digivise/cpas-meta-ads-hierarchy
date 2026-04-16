@@ -154,7 +154,7 @@ async def fetch_all_data(account_id, access_token, date_start, date_end=None, is
     async with httpx.AsyncClient() as client:
         if is_range:
             insights = await fetch_all_pages(client, insights_url)
-            adsets, ads = [], []
+            adsets, ads, campaigns = [], [], []
         else:
             adsets_url = (
                 f"{base}/adsets?fields=id,name,optimization_goal,promoted_object,campaign_id"
@@ -166,13 +166,18 @@ async def fetch_all_data(account_id, access_token, date_start, date_end=None, is
                 f"creative{{thumbnail_url,image_url}}"
                 f"&filtering={ads_filter}&limit=500&access_token={access_token}"
             )
-            insights, adsets, ads = await asyncio.gather(
+            campaigns_url = (
+                f"{base}/campaigns?fields=id,name,objective,effective_status"
+                f"&limit=500&access_token={access_token}"
+            )
+            insights, adsets, ads, campaigns = await asyncio.gather(
                 fetch_all_pages(client, insights_url),
                 fetch_all_pages(client, adsets_url),
                 fetch_all_pages(client, ads_url),
+                fetch_all_pages(client, campaigns_url),
             )
         token_info = await get_token_expiry(client, access_token)
-    return insights, adsets, ads, token_info
+    return insights, adsets, ads, campaigns, token_info
 
 
 def _to_num(v):
@@ -193,7 +198,7 @@ def _resolve_objective(adset):
     return _clean_objective(raw)
 
 
-def build_rows(brand_name, brand_id, date_start, insights, adsets, ads, date_end=None, is_range=False):
+def build_rows(brand_name, brand_id, date_start, insights, adsets, ads, campaigns=None, date_end=None, is_range=False):
     """Normalize & merge data menjadi rows.
 
     Jika is_range=True: 1 row = 1 campaign (level campaign).
@@ -201,6 +206,8 @@ def build_rows(brand_name, brand_id, date_start, insights, adsets, ads, date_end
     """
     if date_end is None:
         date_end = date_start
+    if campaigns is None:
+        campaigns = []
 
     # ── Campaign-level (date range) ──────────────────────────
     if is_range:
@@ -245,6 +252,7 @@ def build_rows(brand_name, brand_id, date_start, insights, adsets, ads, date_end
                 "roas": roas,
                 "status": "OK",
                 "_status": "N/A",
+                "_hierarchy_ok": True,
                 "thumbnail_url": None,
                 "image_url": None,
             })
@@ -253,6 +261,10 @@ def build_rows(brand_name, brand_id, date_start, insights, adsets, ads, date_end
     # ── Ad-level (single date) ───────────────────────────────
     adset_map = {a["id"]: a for a in adsets}
     ads_map = {a["id"]: a for a in ads}
+    campaign_map = {c["id"]: c for c in campaigns}
+
+    # Fallback name map dari insights, dipakai kalau campaign_map/adset_map kosong
+    # (misal /campaigns atau /adsets tidak mengembalikan campaign/adset tertentu)
     campaign_name_map = {}
     adset_name_map = {}
     for entry in insights:
@@ -269,9 +281,28 @@ def build_rows(brand_name, brand_id, date_start, insights, adsets, ads, date_end
     for entry in insights:
         ad_id = entry.get("ad_id")
         ad_ids_with_insight.add(ad_id)
-        adset_meta = adset_map.get(entry.get("adset_id"), {})
         ad_meta = ads_map.get(ad_id, {})
         creative = ad_meta.get("creative", {})
+
+        # Hierarchy consistency check: insight vs /ads (source of truth).
+        # Mismatch biasanya terjadi saat ad dipindah antar adset/campaign
+        # setelah spend tercatat. Pilih adMeta sebagai canonical agar dashboard
+        # konsisten dengan struktur saat ini.
+        hierarchy_ok = True
+        if ad_meta:
+            if entry.get("adset_id") != ad_meta.get("adset_id"):
+                hierarchy_ok = False
+                print(f"[Normalizer] adset_id mismatch ad={ad_id}: "
+                      f"insight={entry.get('adset_id')} ads={ad_meta.get('adset_id')}")
+            if entry.get("campaign_id") != ad_meta.get("campaign_id"):
+                hierarchy_ok = False
+                print(f"[Normalizer] campaign_id mismatch ad={ad_id}: "
+                      f"insight={entry.get('campaign_id')} ads={ad_meta.get('campaign_id')}")
+
+        canonical_adset_id = ad_meta.get("adset_id") or entry.get("adset_id")
+        canonical_campaign_id = ad_meta.get("campaign_id") or entry.get("campaign_id")
+        adset_meta = adset_map.get(canonical_adset_id, {})
+        campaign_meta = campaign_map.get(canonical_campaign_id, {})
 
         atc_value = 0.0
         purchase_value = 0.0
@@ -295,11 +326,12 @@ def build_rows(brand_name, brand_id, date_start, insights, adsets, ads, date_end
         rows.append({
             "brand": brand_name, "brand_id": brand_id,
             "date_start": date_start, "date_stop": date_end,
-            "campaign_id": entry.get("campaign_id"),
-            "campaign_name": entry.get("campaign_name", "N/A"),
-            "adset_id": entry.get("adset_id"),
-            "adset_name": entry.get("adset_name", "N/A"),
-            "ad_id": ad_id, "ad_name": entry.get("ad_name", "N/A"),
+            "campaign_id": canonical_campaign_id,
+            "campaign_name": entry.get("campaign_name") or campaign_meta.get("name") or "N/A",
+            "adset_id": canonical_adset_id,
+            "adset_name": entry.get("adset_name") or adset_meta.get("name") or "N/A",
+            "ad_id": ad_id,
+            "ad_name": entry.get("ad_name") or ad_meta.get("name") or "N/A",
             "objective": _resolve_objective(adset_meta),
             "spend": spend, "reach": _to_num(entry.get("reach")),
             "frequency": _to_num(entry.get("frequency")),
@@ -311,8 +343,9 @@ def build_rows(brand_name, brand_id, date_start, insights, adsets, ads, date_end
             "atc_value": atc_value, "purchase_value": purchase_value,
             "atc_qty": atc_qty, "purchase_qty": purchase_qty,
             "roas": roas,
-            "status": "OK",
+            "status": "OK" if ad_meta else "OK_NO_META",
             "_status": ad_meta.get("effective_status", "UNKNOWN"),
+            "_hierarchy_ok": hierarchy_ok,
             "thumbnail_url": creative.get("thumbnail_url"),
             "image_url": creative.get("image_url"),
         })
@@ -322,14 +355,15 @@ def build_rows(brand_name, brand_id, date_start, insights, adsets, ads, date_end
         if ad_id in ad_ids_with_insight:
             continue
         adset_meta = adset_map.get(ad.get("adset_id"), {})
+        campaign_meta = campaign_map.get(ad.get("campaign_id"), {})
         creative = ad.get("creative", {})
         rows.append({
             "brand": brand_name, "brand_id": brand_id,
             "date_start": date_start, "date_stop": date_end,
             "campaign_id": ad.get("campaign_id"),
-            "campaign_name": campaign_name_map.get(ad.get("campaign_id"), "N/A"),
+            "campaign_name": campaign_meta.get("name") or campaign_name_map.get(ad.get("campaign_id"), "N/A"),
             "adset_id": ad.get("adset_id"),
-            "adset_name": adset_name_map.get(ad.get("adset_id"), "N/A"),
+            "adset_name": adset_meta.get("name") or adset_name_map.get(ad.get("adset_id"), "N/A"),
             "ad_id": ad_id, "ad_name": ad.get("name", "N/A"),
             "objective": _resolve_objective(adset_meta),
             "spend": 0.0, "reach": 0.0, "frequency": 0.0,
@@ -339,6 +373,7 @@ def build_rows(brand_name, brand_id, date_start, insights, adsets, ads, date_end
             "atc_qty": 0.0, "purchase_qty": 0.0, "roas": 0.0,
             "status": "NO_INSIGHT",
             "_status": ad.get("effective_status", "UNKNOWN"),
+            "_hierarchy_ok": True,
             "thumbnail_url": creative.get("thumbnail_url"),
             "image_url": creative.get("image_url"),
         })
@@ -420,7 +455,7 @@ async def fetch_meta_ads(data: dict, authorization: str = Header(...)):
     is_range = (date_start != date_end)
     access_token = os.environ.get("META_ACCESS_TOKEN")
     try:
-        insights, adsets, ads, token_info = await asyncio.to_thread(
+        insights, adsets, ads, campaigns, token_info = await asyncio.to_thread(
             asyncio.run, fetch_all_data(account_id, access_token, date_start, date_end, is_range=is_range)
         )
     except Exception as e:
@@ -435,8 +470,8 @@ async def fetch_meta_ads(data: dict, authorization: str = Header(...)):
         elif days_left <= 14:
             token_warning = f"Token Meta expired {days_left} hari lagi ({token_info.get('expires_on')}). Segera jalankan rotate_token.py"
 
-    rows = build_rows(brand_name, brand_id, date_start, insights, adsets, ads, date_end, is_range=is_range)
-    total_ok = sum(1 for r in rows if r["_status"] == "OK")
+    rows = build_rows(brand_name, brand_id, date_start, insights, adsets, ads, campaigns, date_end, is_range=is_range)
+    total_ok = sum(1 for r in rows if r["status"] == "OK")
 
     return {
         "success": True,
@@ -459,11 +494,42 @@ async def fetch_meta_ads(data: dict, authorization: str = Header(...)):
 # Cron — fetch semua brand setiap hari 07:00 WIB → kirim ke webhook
 # ═══════════════════════════════════════════════════════════════════
 
+async def _send_alert(message: str, context: dict | None = None):
+    """Kirim alert ke ALERT_WEBHOOK_URL (Slack incoming webhook, Discord, atau
+    generic webhook). Silent fail kalau env var tidak di-set atau request gagal
+    — alert tidak boleh menggagalkan cron utama.
+
+    Threshold disarankan:
+      - cron fail > 3 brand (parsial failure dihandle retry 4x per brand)
+      - token Meta expired atau <= 7 hari
+    """
+    import os
+    import httpx
+
+    webhook_url = os.environ.get("ALERT_WEBHOOK_URL")
+    if not webhook_url:
+        print(f"[ALERT] (not sent, ALERT_WEBHOOK_URL not set): {message}")
+        return
+
+    payload = {"text": f"🚨 CPAS Meta Ads Alert\n{message}"}
+    if context:
+        payload["context"] = context
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(webhook_url, json=payload, timeout=10.0)
+            if resp.status_code >= 400:
+                print(f"[ALERT] Webhook returned HTTP {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        print(f"[ALERT] Failed to send alert: {e}")
+
+
 @app.function(
     image=image,
     secrets=[
         modal.Secret.from_name("meta-ads-token"),
         modal.Secret.from_name("n8n-webhook-url"),
+        modal.Secret.from_name("alert-webhook-url"),
     ],
     timeout=1800,
     schedule=modal.Cron("0 0 * * *"),  # 00:00 UTC = 07:00 WIB
@@ -484,6 +550,7 @@ async def daily_fetch_all_brands():
 
     results_summary = []
     total_start = time.time()
+    token_info_last = {}
 
     for brand_name, brand_info in BRAND_MAP.items():
         account_id = brand_info["account_id"]
@@ -501,10 +568,11 @@ async def daily_fetch_all_brands():
                     await asyncio.sleep(wait)
 
                 print(f"[CRON] {brand_name}: fetching (attempt {attempt + 1}/4)...")
-                insights, adsets, ads, token_info = await fetch_all_data(
+                insights, adsets, ads, campaigns, token_info = await fetch_all_data(
                     account_id, access_token, date_str
                 )
-                rows = build_rows(brand_name, brand_id, date_str, insights, adsets, ads)
+                token_info_last = token_info
+                rows = build_rows(brand_name, brand_id, date_str, insights, adsets, ads, campaigns)
 
                 payload = {
                     "success": True,
@@ -512,8 +580,8 @@ async def daily_fetch_all_brands():
                     "brand_id": brand_id,
                     "date": date_str,
                     "total_ads": len(rows),
-                    "total_with_insight": sum(1 for r in rows if r["_status"] == "OK"),
-                    "total_no_insight": sum(1 for r in rows if r["_status"] == "NO_INSIGHT"),
+                    "total_with_insight": sum(1 for r in rows if r["status"] == "OK"),
+                    "total_no_insight": sum(1 for r in rows if r["status"] == "NO_INSIGHT"),
                     "token_days_left": token_info.get("days_left"),
                     "token_expires_on": token_info.get("expires_on"),
                     "data": rows,
@@ -557,11 +625,47 @@ async def daily_fetch_all_brands():
                 print(f"[CRON]   FAILED: {r['brand']} — {r['error']}")
     print(f"[CRON] ================================\n")
 
+    # ── Alerting ──────────────────────────────────────────────
+    # Kirim alert hanya kalau ada kondisi yang layak di-escalate.
+    # Threshold dipilih agar on-call tidak kebanjiran notifikasi:
+    #   - Cron fail: minimal 3 brand gagal (1-2 brand kadang hanya rate limit
+    #     transient yang sudah dihandle retry 4x)
+    #   - Token: <=7 hari atau expired
+    failed_brands = [r["brand"] for r in results_summary if not r["success"]]
+    days_left = token_info_last.get("days_left")
+    expires_on = token_info_last.get("expires_on")
+
+    if failed >= 3:
+        lines = "\n".join([f"  • {r['brand']}: {r['error']}" for r in results_summary if not r["success"]])
+        await _send_alert(
+            f"Cron daily_fetch_all_brands: {failed}/{len(BRAND_MAP)} brand GAGAL pada {date_str}\n{lines}",
+            context={"date": date_str, "failed_brands": failed_brands},
+        )
+    elif failed >= 1:
+        # Tidak page on-call, tapi log jelas agar kelihatan di Modal dashboard
+        print(f"[CRON] WARN: {failed} brand gagal tapi di bawah threshold alert ({failed_brands})")
+
+    if days_left is not None:
+        if days_left <= 0:
+            await _send_alert(
+                f"Token Meta EXPIRED sejak {expires_on}. Seluruh cron akan gagal sampai token di-rotate. "
+                f"Jalankan rotate_token.py segera.",
+                context={"days_left": days_left, "expires_on": expires_on},
+            )
+        elif days_left <= 7:
+            await _send_alert(
+                f"Token Meta akan expired dalam {days_left} hari ({expires_on}). "
+                f"Jalankan rotate_token.py secepatnya.",
+                context={"days_left": days_left, "expires_on": expires_on},
+            )
+
     return {
         "date": date_str,
         "total_brands": len(BRAND_MAP),
         "succeeded": succeeded,
         "failed": failed,
         "total_seconds": round(total_elapsed, 1),
+        "token_days_left": days_left,
+        "token_expires_on": expires_on,
         "details": results_summary,
     }
