@@ -28,7 +28,7 @@ python3 execution/deploy.py
 Script ini otomatis:
 1. Load config dari `.venv/pyvenv.cfg`
 2. Verifikasi modal CLI tersedia
-3. Sync secrets ke Modal (`meta-ads-token`, `api-auth-token`)
+3. Sync secrets ke Modal (`meta-ads-token`, `api-auth-token`, `n8n-webhook-url`, `alert-webhook-url`)
 4. Deploy `modal_app.py`
 
 ## Endpoint Aktif
@@ -61,24 +61,36 @@ Setelah edit → **wajib redeploy** via `python3 execution/deploy.py`.
 
 ## Secrets di Modal
 
-| Modal Secret Name | Env Variable        | Keterangan                  |
-|-------------------|---------------------|-----------------------------|
-| `api-auth-token`  | `API_AUTH_TOKEN`    | Bearer token untuk auth n8n |
-| `meta-ads-token`  | `META_ACCESS_TOKEN` | Meta Graph API access token |
+| Modal Secret Name     | Env Variable          | Keterangan                                          |
+|-----------------------|-----------------------|-----------------------------------------------------|
+| `api-auth-token`      | `API_AUTH_TOKEN`      | Bearer token untuk auth endpoint Modal              |
+| `meta-ads-token`      | `META_ACCESS_TOKEN`   | Meta Graph API access token                         |
+| `n8n-webhook-url`     | `N8N_WEBHOOK_URL`     | Target webhook cron harian (15 brand → n8n)         |
+| `alert-webhook-url`   | `ALERT_WEBHOOK_URL`   | Target alert Slack/Discord/generic (opsional — boleh kosong, alert akan di-log saja) |
 
 Secrets di-sync otomatis saat deploy. Update manual jika diperlukan:
 ```bash
 modal secret create --force meta-ads-token META_ACCESS_TOKEN="TOKEN_BARU"
+modal secret create --force alert-webhook-url ALERT_WEBHOOK_URL="https://hooks.slack.com/..."
 ```
 
-## Call API yang Dilakukan (4 Parallel)
+## Call API yang Dilakukan (4 Parallel + 1 Sequential)
 
 ```
-A. /{account_id}/insights?level=ad   ← metrics + CPAS (semua ads yang serve)
-B. /{account_id}/adsets              ← objective lookup
-C. /{account_id}/ads?status=ACTIVE   ← status + creative (hanya ACTIVE)
-D. debug_token                        ← cek expiry token
+4 parallel (Promise.all):
+  A. /{account_id}/insights?level=ad   ← metrics + CPAS (semua ads yang serve)
+  B. /{account_id}/adsets              ← objective lookup
+  C. /{account_id}/ads?status=ACTIVE   ← status + creative (hanya ACTIVE)
+  D. /{account_id}/campaigns           ← campaign names (fallback utk NO_INSIGHT)
+
+Sequential setelah batch di atas:
+  E. debug_token                        ← cek expiry token (non-blocking)
 ```
+
+⚠️ **Call C filter `effective_status=ACTIVE`** menyebabkan ads yang PAUSED/ARCHIVED
+tidak masuk ke `ads_map`, sehingga insight dari ads tersebut akan muncul dengan
+`status = "OK_NO_META"`, `_status = "UNKNOWN"`, dan thumbnail null. Ini penyebab
+status mismatch yang sering dilaporkan vs dashboard Meta Ads Manager.
 
 ## Setelah Deploy — Verifikasi
 

@@ -35,6 +35,9 @@ def main() -> None:
     cfg = load_config()
     require(cfg, "MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "META_ACCESS_TOKEN", "API_AUTH_TOKEN", "N8N_WEBHOOK_URL")
 
+    # ALERT_WEBHOOK_URL opsional — kalau kosong, alert akan di-log saja tanpa dikirim
+    alert_webhook = cfg.get("ALERT_WEBHOOK_URL", "")
+
     modal_env = {
         **os.environ,
         "MODAL_TOKEN_ID": cfg["MODAL_TOKEN_ID"],
@@ -56,6 +59,14 @@ def main() -> None:
     run(
         ["modal", "secret", "create", "--force",
          "n8n-webhook-url", f"N8N_WEBHOOK_URL={cfg['N8N_WEBHOOK_URL']}"],
+        env=modal_env,
+    )
+    # alert-webhook-url selalu dibuat (nilai kosong diperbolehkan → alert di-log saja).
+    # Modal Secret dengan value kosong tetap valid; modal_app._send_alert akan
+    # fallback ke print saat os.environ.get("ALERT_WEBHOOK_URL") falsy.
+    run(
+        ["modal", "secret", "create", "--force",
+         "alert-webhook-url", f"ALERT_WEBHOOK_URL={alert_webhook}"],
         env=modal_env,
     )
 
