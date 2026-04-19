@@ -10,9 +10,12 @@ user-invocable: false
 
 ```
 POST https://aliefianislami--cpas-meta-ads-fetch-meta-ads.modal.run
-Authorization: Bearer c2f058da6462d04c24cbf190289df6a4761977b34a1c08efe50bd3bf092159e4
+Authorization: Bearer <API_AUTH_TOKEN>
 Content-Type: application/json
 ```
+
+Token disimpan di Modal Secret `api-auth-token` (set oleh `deploy.py`).
+Untuk pakai lokal: copy `.env.example` → `.env` di root repo, isi `API_AUTH_TOKEN`.
 
 Request body:
 ```json

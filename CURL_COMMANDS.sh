@@ -4,8 +4,13 @@
 # Endpoint aktif per deploy terakhir: 2026-03-05
 # ============================================================
 
-ENDPOINT="https://aliefianislami--cpas-meta-ads-fetch-meta-ads.modal.run"
-TOKEN="c2f058da6462d04c24cbf190289df6a4761977b34a1c08efe50bd3bf092159e4"
+# Load token dari .env (copy .env.example → .env dan isi API_AUTH_TOKEN)
+if [ -f "$(dirname "$0")/.env" ]; then
+  set -a; . "$(dirname "$0")/.env"; set +a
+fi
+
+ENDPOINT="${CPAS_ENDPOINT:-https://aliefianislami--cpas-meta-ads-fetch-meta-ads.modal.run}"
+TOKEN="${API_AUTH_TOKEN:?API_AUTH_TOKEN belum di-set — copy .env.example ke .env dan isi tokennya}"
 
 # ============================================================
 # PENGGUNAAN DASAR
