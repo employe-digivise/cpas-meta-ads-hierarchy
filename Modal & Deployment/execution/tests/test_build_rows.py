@@ -273,3 +273,78 @@ class TestHierarchyAndNames:
         )
         assert rows[0]["status"] == "OK_NO_META"
         assert rows[0]["_status"] == "UNKNOWN"
+
+
+class TestStatusPreservation:
+    """Memastikan status asli di Meta (ACTIVE/PAUSED/ARCHIVED/dll) ikut tercatat
+    untuk level ad, adset, dan campaign — tidak hilang setelah migrasi dari
+    'ACTIVE-only filter' ke 'fetch by insights ad_ids'."""
+
+    def test_paused_ad_with_spend_keeps_paused_status_and_creative(
+        self, make_insight, make_adset, make_ad, make_campaign
+    ):
+        # Skenario nyata: user pause iklan pagi ini setelah iklan
+        # sempat spend kemarin. /ads?filter=ACTIVE akan miss, tapi
+        # _batch_fetch_by_ids harus ambil metadata-nya kembali.
+        rows = build_rows(
+            "ATRIA", "brand-uuid-1", "2026-03-08",
+            insights=[make_insight(ad_id="ad_paused")],
+            adsets=[make_adset()],
+            ads=[make_ad(id="ad_paused", effective_status="PAUSED")],
+            campaigns=[make_campaign()],
+        )
+        assert len(rows) == 1
+        r = rows[0]
+        assert r["status"] == "OK"
+        assert r["_status"] == "PAUSED"
+        assert r["thumbnail_url"] == "https://thumb.jpg"
+        assert r["image_url"] == "https://img.jpg"
+
+    def test_preserves_adset_and_campaign_effective_status(
+        self, make_insight, make_adset, make_ad, make_campaign
+    ):
+        rows = build_rows(
+            "ATRIA", "brand-uuid-1", "2026-03-08",
+            insights=[make_insight()],
+            adsets=[make_adset(effective_status="PAUSED")],
+            ads=[make_ad(effective_status="ACTIVE")],
+            campaigns=[make_campaign(effective_status="ARCHIVED")],
+        )
+        r = rows[0]
+        assert r["_status"] == "ACTIVE"
+        assert r["_adset_status"] == "PAUSED"
+        assert r["_campaign_status"] == "ARCHIVED"
+
+    def test_adset_and_campaign_status_unknown_when_meta_missing(
+        self, make_insight, make_ad
+    ):
+        # adset/campaign tidak dikembalikan Meta → status fallback UNKNOWN,
+        # bukan crash atau None.
+        rows = build_rows(
+            "ATRIA", "brand-uuid-1", "2026-03-08",
+            insights=[make_insight()],
+            adsets=[],
+            ads=[make_ad()],
+            campaigns=[],
+        )
+        r = rows[0]
+        assert r["_adset_status"] == "UNKNOWN"
+        assert r["_campaign_status"] == "UNKNOWN"
+
+    def test_no_insight_active_ad_also_carries_adset_and_campaign_status(
+        self, make_adset, make_ad, make_campaign
+    ):
+        # Iklan aktif tanpa spend di date range → NO_INSIGHT row tetap
+        # punya status adset & campaign (untuk audit di dashboard).
+        rows = build_rows(
+            "ATRIA", "brand-uuid-1", "2026-03-08",
+            insights=[],
+            adsets=[make_adset(effective_status="ACTIVE")],
+            ads=[make_ad(effective_status="ACTIVE")],
+            campaigns=[make_campaign(effective_status="ACTIVE")],
+        )
+        r = rows[0]
+        assert r["status"] == "NO_INSIGHT"
+        assert r["_status"] == "ACTIVE"
+        assert r["_adset_status"] == "ACTIVE"
+        assert r["_campaign_status"] == "ACTIVE"

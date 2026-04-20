@@ -61,6 +61,7 @@ def make_adset():
             "name": "Adset 1",
             "campaign_id": "camp_1",
             "optimization_goal": "PURCHASE",
+            "effective_status": "ACTIVE",
         }
         base.update(overrides)
         return base
@@ -86,7 +87,7 @@ def make_ad():
 @pytest.fixture
 def make_campaign():
     def _make(**overrides):
-        base = {"id": "camp_1", "name": "Campaign 1"}
+        base = {"id": "camp_1", "name": "Campaign 1", "effective_status": "ACTIVE"}
         base.update(overrides)
         return base
     return _make

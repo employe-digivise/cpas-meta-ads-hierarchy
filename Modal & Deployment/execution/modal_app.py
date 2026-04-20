@@ -98,6 +98,37 @@ async def fetch_all_pages(client, url):
     return results
 
 
+async def _batch_fetch_by_ids(client, graph_root, ids, fields, access_token, batch_size=50):
+    """Fetch metadata untuk kumpulan IDs via Graph batch endpoint (?ids=...).
+
+    Dipakai untuk ambil metadata ad/adset/campaign yang spesifik TANPA filter
+    effective_status — berguna untuk "spent-but-not-currently-active" ads
+    (iklan yang punya spend di date range tapi sekarang sudah di-pause/archived).
+
+    Meta API: GET /v21.0/?ids=<csv> mengembalikan dict {id: {...}}. Batch
+    dibatasi ~50 IDs per request; gunakan asyncio.gather untuk IDs > 50.
+    ID yang tidak dikembalikan Meta (biasanya karena entity sudah dihapus
+    permanen) di-skip diam-diam — nanti akan jatuh ke OK_NO_META di build_rows.
+    """
+    import asyncio
+
+    if not ids:
+        return []
+
+    ids_list = list(ids)
+    batches = [ids_list[i:i + batch_size] for i in range(0, len(ids_list), batch_size)]
+
+    async def _one_batch(batch):
+        ids_param = ",".join(batch)
+        url = f"{graph_root}/?ids={ids_param}&fields={fields}&access_token={access_token}"
+        resp = await fetch_with_retry(client, url)
+        body = resp.json()
+        return [v for v in body.values() if isinstance(v, dict) and v.get("id")]
+
+    nested = await asyncio.gather(*[_one_batch(b) for b in batches])
+    return [item for batch_result in nested for item in batch_result]
+
+
 async def get_token_expiry(client, access_token):
     """Cek sisa hari token Meta. Tidak menggagalkan request jika error."""
     from datetime import datetime, timezone
@@ -132,6 +163,7 @@ async def fetch_all_data(account_id, access_token, date_start, date_end=None, is
         date_end = date_start
 
     base = f"https://graph.facebook.com/{API_VERSION}/{account_id}"
+    graph_root = f"https://graph.facebook.com/{API_VERSION}"
     time_range = json.dumps({"since": date_start, "until": date_end})
 
     if is_range:
@@ -157,7 +189,7 @@ async def fetch_all_data(account_id, access_token, date_start, date_end=None, is
             adsets, ads, campaigns = [], [], []
         else:
             adsets_url = (
-                f"{base}/adsets?fields=id,name,optimization_goal,promoted_object,campaign_id"
+                f"{base}/adsets?fields=id,name,optimization_goal,promoted_object,campaign_id,effective_status"
                 f"&limit=500&access_token={access_token}"
             )
             ads_filter = json.dumps([{"field": "effective_status", "operator": "IN", "value": ["ACTIVE"]}])
@@ -176,6 +208,21 @@ async def fetch_all_data(account_id, access_token, date_start, date_end=None, is
                 fetch_all_pages(client, ads_url),
                 fetch_all_pages(client, campaigns_url),
             )
+
+            # Cari ad_ids yang punya spend (di insights) tapi TIDAK ada di list
+            # ads-aktif — biasanya karena di-pause/archived/rejected setelah
+            # spend tercatat. Fetch metadata mereka tanpa filter status agar
+            # row punya creative + effective_status yang benar (bukan UNKNOWN).
+            active_ad_ids = {a["id"] for a in ads if a.get("id")}
+            spent_ad_ids = {e["ad_id"] for e in insights if e.get("ad_id")}
+            missing_ad_ids = spent_ad_ids - active_ad_ids
+            if missing_ad_ids:
+                extra_ads = await _batch_fetch_by_ids(
+                    client, graph_root, missing_ad_ids,
+                    "id,name,adset_id,campaign_id,effective_status,creative{thumbnail_url,image_url}",
+                    access_token,
+                )
+                ads.extend(extra_ads)
         token_info = await get_token_expiry(client, access_token)
     return insights, adsets, ads, campaigns, token_info
 
@@ -252,6 +299,8 @@ def build_rows(brand_name, brand_id, date_start, insights, adsets, ads, campaign
                 "roas": roas,
                 "status": "OK",
                 "_status": "N/A",
+                "_adset_status": "N/A",
+                "_campaign_status": "N/A",
                 "_hierarchy_ok": True,
                 "thumbnail_url": None,
                 "image_url": None,
@@ -345,6 +394,8 @@ def build_rows(brand_name, brand_id, date_start, insights, adsets, ads, campaign
             "roas": roas,
             "status": "OK" if ad_meta else "OK_NO_META",
             "_status": ad_meta.get("effective_status", "UNKNOWN"),
+            "_adset_status": adset_meta.get("effective_status", "UNKNOWN"),
+            "_campaign_status": campaign_meta.get("effective_status", "UNKNOWN"),
             "_hierarchy_ok": hierarchy_ok,
             "thumbnail_url": creative.get("thumbnail_url"),
             "image_url": creative.get("image_url"),
@@ -373,6 +424,8 @@ def build_rows(brand_name, brand_id, date_start, insights, adsets, ads, campaign
             "atc_qty": 0.0, "purchase_qty": 0.0, "roas": 0.0,
             "status": "NO_INSIGHT",
             "_status": ad.get("effective_status", "UNKNOWN"),
+            "_adset_status": adset_meta.get("effective_status", "UNKNOWN"),
+            "_campaign_status": campaign_meta.get("effective_status", "UNKNOWN"),
             "_hierarchy_ok": True,
             "thumbnail_url": creative.get("thumbnail_url"),
             "image_url": creative.get("image_url"),
