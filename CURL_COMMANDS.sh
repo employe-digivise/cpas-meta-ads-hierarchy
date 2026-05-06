@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # CPAS Meta Ads — Curl Commands
-# Endpoint VPS: http://31.97.222.83:9005/fetch_meta_ads
+# Endpoint VPS: http://31.97.222.83:9008/fetch_meta_ads
 # ============================================================
 
 # Load token dari .env (copy .env.example → .env dan isi API_AUTH_TOKEN)
@@ -9,13 +9,13 @@ if [ -f "$(dirname "$0")/.env" ]; then
   set -a; . "$(dirname "$0")/.env"; set +a
 fi
 
-ENDPOINT="${CPAS_ENDPOINT:-http://31.97.222.83:9005/fetch_meta_ads}"
+ENDPOINT="${CPAS_ENDPOINT:-http://31.97.222.83:9008/fetch_meta_ads}"
 TOKEN="${API_AUTH_TOKEN:?API_AUTH_TOKEN belum di-set — copy .env.example ke .env dan isi tokennya}"
 
 # ============================================================
 # HEALTH CHECK
 # ============================================================
-# curl http://31.97.222.83:9005/health
+# curl http://31.97.222.83:9008/health
 # Expected: {"status":"ok"}
 
 

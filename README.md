@@ -4,8 +4,8 @@ Backend fetch data **Meta Ads (CPAS)** untuk 15 brand Digivise. Di-deploy di
 **VPS** sebagai HTTP endpoint (FastAPI/uvicorn) + daily cron (APScheduler in-process),
 lalu dikonsumsi oleh n8n → Supabase → dashboard Lovable.
 
-- **Endpoint:** `POST http://31.97.222.83:9005/fetch_meta_ads`
-- **Health:** `GET http://31.97.222.83:9005/health`
+- **Endpoint:** `POST http://31.97.222.83:9008/fetch_meta_ads`
+- **Health:** `GET http://31.97.222.83:9008/health`
 - **Cron:** 07:00 WIB tiap hari (fetch semua 15 brand, push ke n8n webhook)
 - **Output:** flat rows (1 row = 1 ad × 1 hari) — siap di-upsert ke Supabase
 
@@ -75,7 +75,7 @@ bash /root/digivise/cpas-meta-ads/Modal\ \&\ Deployment/execution/deploy/update.
 ```bash
 systemctl status cpas-meta-ads
 journalctl -u cpas-meta-ads -f
-curl http://31.97.222.83:9005/health
+curl http://31.97.222.83:9008/health
 ```
 
 ### Cek Token
@@ -124,7 +124,7 @@ n8n (1 HTTP Request)  ────────────────┐
                                       │  POST /fetch_meta_ads
 APScheduler (07:00 WIB × 15 brand)────┤  Authorization: Bearer
                                       ▼
-                          VPS:9005 (uvicorn → modal_app.py)
+                          VPS:9008 (uvicorn → modal_app.py)
                                       │
                           insights → batch metadata → normalize
                                       │
@@ -145,7 +145,7 @@ systemd via `EnvironmentFile`. **Tidak pernah di-commit.**
 | `API_AUTH_TOKEN` | Bearer token untuk endpoint `/fetch_meta_ads` |
 | `N8N_WEBHOOK_URL` | Tujuan push hasil cron harian |
 | `ALERT_WEBHOOK_URL` | Opsional — Slack/Discord alert |
-| `HOST` / `PORT` | Default `0.0.0.0` / `9005` |
+| `HOST` / `PORT` | Default `0.0.0.0` / `9008` |
 
 ---
 

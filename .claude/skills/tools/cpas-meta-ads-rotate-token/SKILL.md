@@ -46,7 +46,7 @@ python "Modal & Deployment/execution/check_token.py"
 python "Modal & Deployment/execution/test_endpoint.py" ATRIA
 
 # Cek service di VPS jalan
-curl http://31.97.222.83:9005/health
+curl http://31.97.222.83:9008/health
 ```
 
 ## Catatan

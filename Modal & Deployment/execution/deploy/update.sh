@@ -24,4 +24,4 @@ systemctl status "$SERVICE_NAME" --no-pager -l | head -10
 
 echo ""
 echo "Health check:"
-curl -s http://localhost:9005/health && echo ""
+curl -s http://localhost:9008/health && echo ""

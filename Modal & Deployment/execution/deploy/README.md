@@ -2,7 +2,7 @@
 
 Service: FastAPI (uvicorn) + APScheduler (in-process cron)
 VPS: `31.97.222.83`
-Port: `9005` (terpisah dari WhatsApp service di `9004`)
+Port: `9008` (terpisah dari WhatsApp service di `9004`)
 Path: `/root/digivise/cpas-meta-ads/`
 
 ## First-time install (di VPS, sebagai root)
@@ -56,10 +56,10 @@ tail -f /var/log/cpas-meta-ads.log      # alternative log file
 
 ```bash
 # Health
-curl http://31.97.222.83:9005/health
+curl http://31.97.222.83:9008/health
 
 # Fetch data brand
-curl -X POST http://31.97.222.83:9005/fetch_meta_ads \
+curl -X POST http://31.97.222.83:9008/fetch_meta_ads \
   -H "Authorization: Bearer <API_AUTH_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"brand_name": "ATRIA"}'
@@ -87,14 +87,14 @@ cd /root/digivise/cpas-meta-ads
 
 ## Firewall (kalau perlu)
 
-Pastikan port `9005` open kalau client di luar VPS perlu akses:
+Pastikan port `9008` open kalau client di luar VPS perlu akses:
 ```bash
-ufw allow 9005/tcp   # kalau ufw aktif
+ufw allow 9008/tcp   # kalau ufw aktif
 ```
 
 ## Migrasi dari Modal
 
-Setelah VPS service running stable + n8n sudah pointing ke `http://31.97.222.83:9005`:
+Setelah VPS service running stable + n8n sudah pointing ke `http://31.97.222.83:9008`:
 1. Test endpoint VPS dengan brand sample
 2. Update `VITE_API_URL` di Lovable frontend (kalau ada)
 3. Update `webhook URL` di n8n workflow (yang manggil `/fetch_meta_ads`)
@@ -107,6 +107,6 @@ Setelah VPS service running stable + n8n sudah pointing ke `http://31.97.222.83:
 |---|---|
 | `Cannot find module 'fastapi'` | Pip install belum jalan: `.venv/bin/pip install -r requirements.txt` |
 | Service `failed (Result: exit-code)` | Cek log: `journalctl -u cpas-meta-ads -n 50` |
-| `Port 9005 already in use` | Cek dengan `lsof -i :9005`, ganti port di systemd service |
+| `Port 9008 already in use` | Cek dengan `lsof -i :9008`, ganti port di systemd service |
 | Cron tidak jalan | Cek `systemctl is-active cpas-meta-ads` (cron in-process butuh service hidup) |
 | `.env` tidak ke-load | EnvironmentFile harus path absolut tanpa quotes; cek `systemctl cat cpas-meta-ads` |

@@ -9,8 +9,8 @@ user-invocable: false
 ## Endpoint Aktif
 
 ```
-POST http://31.97.222.83:9005/fetch_meta_ads
-GET  http://31.97.222.83:9005/health
+POST http://31.97.222.83:9008/fetch_meta_ads
+GET  http://31.97.222.83:9008/health
 Authorization: Bearer <API_AUTH_TOKEN>
 Content-Type: application/json
 ```
@@ -136,7 +136,7 @@ n8n (1 HTTP Request)  ────────────────┐
 APScheduler (07:00 WIB × 15 brand)────┤  Authorization: Bearer
                                       │
                                       ▼
-                          VPS:9005 (uvicorn → modal_app.py)
+                          VPS:9008 (uvicorn → modal_app.py)
                                       │
                           Phase A — 4 parallel calls:
                             A. insights (ads yang serve)

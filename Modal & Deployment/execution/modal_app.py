@@ -14,7 +14,7 @@ Cron: daily_fetch_all_brands
   Proses: Fetch semua 15 brand sequential → kirim ke webhook n8n
 
 Run lokal:
-  uvicorn modal_app:app --host 0.0.0.0 --port 9005
+  uvicorn modal_app:app --host 0.0.0.0 --port 9008
 
 Run via systemd (production VPS): lihat deploy/cpas-meta-ads.service
 """
@@ -744,6 +744,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "modal_app:app",
         host=os.environ.get("HOST", "0.0.0.0"),
-        port=int(os.environ.get("PORT", "9005")),
+        port=int(os.environ.get("PORT", "9008")),
         log_level="info",
     )

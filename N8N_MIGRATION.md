@@ -7,7 +7,7 @@ Cuma **1 field yang berubah**: URL. Headers + body + method tetap sama.
 | Field | Sebelum (Modal) | Sesudah (VPS) |
 |---|---|---|
 | **Method** | `POST` | `POST` (sama) |
-| **URL** | `https://aliefianislami--cpas-meta-ads-fetch-meta-ads.modal.run` | `http://31.97.222.83:9005/fetch_meta_ads` |
+| **URL** | `https://aliefianislami--cpas-meta-ads-fetch-meta-ads.modal.run` | `http://31.97.222.83:9008/fetch_meta_ads` |
 | **Auth Header** | `Authorization: Bearer <API_AUTH_TOKEN>` | `Authorization: Bearer <API_AUTH_TOKEN>` (sama) |
 | **Content-Type** | `application/json` | `application/json` (sama) |
 | **Body** | `{"brand_name": "ATRIA"}` | `{"brand_name": "ATRIA"}` (sama) |
@@ -17,14 +17,14 @@ Cuma **1 field yang berubah**: URL. Headers + body + method tetap sama.
 
 1. Buka workflow yang manggil Modal
 2. Edit **HTTP Request** node:
-   - Field **URL** → ganti ke `http://31.97.222.83:9005/fetch_meta_ads`
+   - Field **URL** → ganti ke `http://31.97.222.83:9008/fetch_meta_ads`
 3. Save + Activate ulang
 4. Test 1x manual untuk verifikasi response sama dengan sebelumnya
 
 ## Catatan Penting
 
 ### HTTPS → HTTP
-Endpoint VPS plain HTTP (port 9005). Kalau n8n yang kamu pakai enforce
+Endpoint VPS plain HTTP (port 9008). Kalau n8n yang kamu pakai enforce
 HTTPS-only outbound (n8n Cloud), VPS perlu reverse proxy nginx + cert
 Let's Encrypt. Untuk n8n self-hosted, HTTP mestinya OK.
 
@@ -44,13 +44,13 @@ bakal auto-restart dalam <10 detik.
 
 ### Health check
 ```bash
-curl http://31.97.222.83:9005/health
+curl http://31.97.222.83:9008/health
 # Expected: {"status":"ok"}
 ```
 
 ### Fetch 1 brand (default = kemarin)
 ```bash
-curl -X POST http://31.97.222.83:9005/fetch_meta_ads \
+curl -X POST http://31.97.222.83:9008/fetch_meta_ads \
   -H "Authorization: Bearer <API_AUTH_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"brand_name": "ATRIA"}'
@@ -58,7 +58,7 @@ curl -X POST http://31.97.222.83:9005/fetch_meta_ads \
 
 ### Fetch 1 brand tanggal tertentu
 ```bash
-curl -X POST http://31.97.222.83:9005/fetch_meta_ads \
+curl -X POST http://31.97.222.83:9008/fetch_meta_ads \
   -H "Authorization: Bearer <API_AUTH_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"brand_name": "ATRIA", "date": "2026-03-04"}'
@@ -66,7 +66,7 @@ curl -X POST http://31.97.222.83:9005/fetch_meta_ads \
 
 ### Fetch date range (level campaign)
 ```bash
-curl -X POST http://31.97.222.83:9005/fetch_meta_ads \
+curl -X POST http://31.97.222.83:9008/fetch_meta_ads \
   -H "Authorization: Bearer <API_AUTH_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"brand_name": "ATRIA", "date_start": "2026-02-01", "date_end": "2026-02-28"}'
@@ -76,7 +76,7 @@ curl -X POST http://31.97.222.83:9005/fetch_meta_ads \
 ```bash
 for BRAND in AMK ARSY ATRIA BALLOONABLE CHANIRA "GOODS A FOOTWEAR" HLS KAUFAZ LILIS MENLIVING "PORTS JOURNAL" RTSR "URBAN EXCHANGE" FRSCARVES WELLBORN; do
   echo "=== $BRAND ==="
-  curl -s -X POST http://31.97.222.83:9005/fetch_meta_ads \
+  curl -s -X POST http://31.97.222.83:9008/fetch_meta_ads \
     -H "Authorization: Bearer <API_AUTH_TOKEN>" \
     -H "Content-Type: application/json" \
     -d "{\"brand_name\": \"$BRAND\"}" \

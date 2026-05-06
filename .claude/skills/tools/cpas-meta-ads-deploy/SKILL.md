@@ -7,7 +7,7 @@ allowed-tools: Read, Edit, Write, Bash
 
 # SOP — Deploy CPAS Meta Ads ke VPS
 
-Project ini berjalan di VPS `31.97.222.83` port `9005` (FastAPI/uvicorn + APScheduler).
+Project ini berjalan di VPS `31.97.222.83` port `9008` (FastAPI/uvicorn + APScheduler).
 Tidak lagi pakai Modal.
 
 ## Lokasi File
@@ -50,14 +50,14 @@ systemctl restart cpas-meta-ads
 ## Endpoint Aktif
 
 ```
-POST http://31.97.222.83:9005/fetch_meta_ads
+POST http://31.97.222.83:9008/fetch_meta_ads
 Authorization: Bearer <API_AUTH_TOKEN>
 Content-Type: application/json
 
 Body: { "brand_name": "ATRIA" }
       { "brand_name": "ATRIA", "date_start": "2026-02-01", "date_end": "2026-02-28" }
 
-Health: GET http://31.97.222.83:9005/health
+Health: GET http://31.97.222.83:9008/health
 ```
 
 ## Cara Tambah / Edit Brand
@@ -83,7 +83,7 @@ Setelah edit → commit + push, lalu di VPS jalankan `update.sh`.
 | `META_ACCESS_TOKEN` | Meta Graph API access token |
 | `N8N_WEBHOOK_URL` | Target webhook cron harian |
 | `ALERT_WEBHOOK_URL` | Target alert (opsional, boleh kosong) |
-| `HOST` / `PORT` | Default `0.0.0.0` / `9005` |
+| `HOST` / `PORT` | Default `0.0.0.0` / `9008` |
 
 systemd `EnvironmentFile=/root/digivise/cpas-meta-ads/.env` — load otomatis saat service start.
 
@@ -107,7 +107,7 @@ Setiap row carry `_status`, `_adset_status`, `_campaign_status` (dari `effective
 
 ```bash
 # Health check
-curl http://31.97.222.83:9005/health
+curl http://31.97.222.83:9008/health
 
 # Smoke test 1 brand
 python "Modal & Deployment/execution/test_endpoint.py" ATRIA
@@ -138,7 +138,7 @@ APScheduler in-process — kalau service mati, cron juga mati. Pastikan
 `systemctl is-active cpas-meta-ads` = `active`.
 
 ### Port collision
-WhatsApp service sudah pakai 9004. CPAS pakai 9005. Kalau perlu ganti port,
+WhatsApp service sudah pakai 9004. CPAS pakai 9008. Kalau perlu ganti port,
 edit `cpas-meta-ads.service` + `.env` (PORT) lalu `systemctl daemon-reload && systemctl restart cpas-meta-ads`.
 
 ### Brand tidak ditemukan (HTTP 400)

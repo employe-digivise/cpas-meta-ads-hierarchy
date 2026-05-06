@@ -58,7 +58,7 @@ if [ -f "$APP_DIR/.env" ]; then
   systemctl status "$SERVICE_NAME" --no-pager -l | head -15
   echo ""
   echo "Health check:"
-  curl -s http://localhost:9005/health || echo "  (service belum siap, cek log: journalctl -u $SERVICE_NAME -n 50)"
+  curl -s http://localhost:9008/health || echo "  (service belum siap, cek log: journalctl -u $SERVICE_NAME -n 50)"
 else
   echo "  Service di-enable tapi belum di-start (menunggu .env)."
 fi

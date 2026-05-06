@@ -45,7 +45,7 @@ def main() -> None:
     require(cfg, "API_AUTH_TOKEN")
 
     # Endpoint default: VPS. Override via CPAS_ENDPOINT di .env kalau test ke instance lain.
-    url   = cfg.get("CPAS_ENDPOINT", "http://31.97.222.83:9005/fetch_meta_ads")
+    url   = cfg.get("CPAS_ENDPOINT", "http://31.97.222.83:9008/fetch_meta_ads")
     token = cfg["API_AUTH_TOKEN"]
 
     # ── Step 2: Request ──────────────────────────────────────
