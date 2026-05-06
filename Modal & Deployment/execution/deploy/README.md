@@ -77,7 +77,7 @@ systemctl disable cpas-meta-ads   # disable autostart on boot
 ## Cron schedule
 
 Cron `daily_fetch_all_brands` jalan **in-process** via APScheduler (bukan crontab OS).
-Jadwal: `00:00 UTC` = `07:00 WIB` setiap hari.
+Jadwal: `02:00 UTC` = `09:00 WIB` setiap hari.
 
 Untuk men-trigger manual (testing tanpa nunggu jadwal):
 ```bash

@@ -6,7 +6,7 @@ lalu dikonsumsi oleh n8n → Supabase → dashboard Lovable.
 
 - **Endpoint:** `POST http://31.97.222.83:9008/fetch_meta_ads`
 - **Health:** `GET http://31.97.222.83:9008/health`
-- **Cron:** 07:00 WIB tiap hari (fetch semua 15 brand, push ke n8n webhook)
+- **Cron:** 09:00 WIB tiap hari (fetch semua 15 brand, push ke n8n webhook)
 - **Output:** flat rows (1 row = 1 ad × 1 hari) — siap di-upsert ke Supabase
 
 ---
@@ -47,7 +47,7 @@ cpas_meta_ads_hierarchy/
 ### `modal_app.py`
 - HTTP endpoint `POST /fetch_meta_ads` — fetch 1 brand (default kemarin) atau date range.
 - Endpoint `GET /health` — untuk monitoring.
-- Cron `daily_fetch_all_brands` — jalan 00:00 UTC (07:00 WIB) via APScheduler in-process.
+- Cron `daily_fetch_all_brands` — jalan 02:00 UTC (09:00 WIB) via APScheduler in-process.
 - Alert via `ALERT_WEBHOOK_URL` kalau >3 brand gagal atau token ≤7 hari.
 - Strategi fetch: insights dulu → batch metadata `?ids=...` untuk ad spent-but-not-active
   (preserves status PAUSED/ARCHIVED untuk ads yang sempat spend).
@@ -122,7 +122,7 @@ di-`SUM()`) ada di [`.claude/skills/ads-campaigns/cpas-meta-ads/SKILL.md`](.clau
 ```
 n8n (1 HTTP Request)  ────────────────┐
                                       │  POST /fetch_meta_ads
-APScheduler (07:00 WIB × 15 brand)────┤  Authorization: Bearer
+APScheduler (09:00 WIB × 15 brand)────┤  Authorization: Bearer
                                       ▼
                           VPS:9008 (uvicorn → modal_app.py)
                                       │

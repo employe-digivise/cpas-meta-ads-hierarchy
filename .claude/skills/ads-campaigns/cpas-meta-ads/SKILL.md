@@ -133,7 +133,7 @@ status = "OK" AND spend > 0
 ```
 n8n (1 HTTP Request)  ────────────────┐
                                       │  POST /fetch_meta_ads
-APScheduler (07:00 WIB × 15 brand)────┤  Authorization: Bearer
+APScheduler (09:00 WIB × 15 brand)────┤  Authorization: Bearer
                                       │
                                       ▼
                           VPS:9008 (uvicorn → modal_app.py)

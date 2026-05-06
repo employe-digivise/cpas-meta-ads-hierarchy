@@ -10,7 +10,7 @@ Endpoint: POST /fetch_meta_ads
   Output: Array of normalized ad rows (1 row = 1 ad per date range)
 
 Cron: daily_fetch_all_brands
-  Jadwal: 07:00 WIB (00:00 UTC) setiap hari
+  Jadwal: 09:00 WIB (02:00 UTC) setiap hari
   Proses: Fetch semua 15 brand sequential → kirim ke webhook n8n
 
 Run lokal:
@@ -474,7 +474,7 @@ async def _send_alert(message: str, context: dict | None = None):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Cron job — fetch semua brand setiap hari 07:00 WIB → kirim ke webhook
+# Cron job — fetch semua brand setiap hari 09:00 WIB → kirim ke webhook
 # ═══════════════════════════════════════════════════════════════════
 
 async def daily_fetch_all_brands():
@@ -615,17 +615,17 @@ async def lifespan(_app: FastAPI):
     from apscheduler.triggers.cron import CronTrigger
 
     scheduler = AsyncIOScheduler(timezone="UTC")
-    # 00:00 UTC = 07:00 WIB — sama dengan jadwal Modal sebelumnya
+    # 02:00 UTC = 09:00 WIB
     scheduler.add_job(
         daily_fetch_all_brands,
-        CronTrigger(hour=0, minute=0, timezone="UTC"),
+        CronTrigger(hour=2, minute=0, timezone="UTC"),
         id="daily_fetch_all_brands",
         misfire_grace_time=3600,
         coalesce=True,
         max_instances=1,
     )
     scheduler.start()
-    print(f"[STARTUP] APScheduler started: daily_fetch_all_brands @ 00:00 UTC (07:00 WIB)")
+    print(f"[STARTUP] APScheduler started: daily_fetch_all_brands @ 02:00 UTC (09:00 WIB)")
     try:
         yield
     finally:
