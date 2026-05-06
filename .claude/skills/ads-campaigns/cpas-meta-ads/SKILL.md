@@ -9,12 +9,14 @@ user-invocable: false
 ## Endpoint Aktif
 
 ```
-POST https://aliefianislami--cpas-meta-ads-fetch-meta-ads.modal.run
+POST http://31.97.222.83:9005/fetch_meta_ads
+GET  http://31.97.222.83:9005/health
 Authorization: Bearer <API_AUTH_TOKEN>
 Content-Type: application/json
 ```
 
-Token disimpan di Modal Secret `api-auth-token` (set oleh `deploy.py`).
+Service dijalankan di VPS via systemd (`cpas-meta-ads.service`).
+Env vars (termasuk `API_AUTH_TOKEN`) di-load dari `/root/digivise/cpas-meta-ads/.env`.
 Untuk pakai lokal: copy `.env.example` → `.env` di root repo, isi `API_AUTH_TOKEN`.
 
 Request body:
@@ -131,19 +133,24 @@ status = "OK" AND spend > 0
 ```
 n8n (1 HTTP Request)  ────────────────┐
                                       │  POST /fetch_meta_ads
-Modal Cron (07:00 WIB × 15 brand) ────┤  Authorization: Bearer
+APScheduler (07:00 WIB × 15 brand)────┤  Authorization: Bearer
                                       │
                                       ▼
-                          Modal Endpoint (modal_app.py)
+                          VPS:9005 (uvicorn → modal_app.py)
                                       │
-                          4 parallel calls:
+                          Phase A — 4 parallel calls:
                             A. insights (ads yang serve)
-                            B. adsets (objective lookup)
+                            B. adsets (objective + status)
                             C. ads ACTIVE (status + creative)
-                            D. campaigns (name fallback NO_INSIGHT)
+                            D. campaigns (name + status)
+                                      │
+                          Phase B — batch metadata fetch:
+                            E. /v21.0/?ids=<spent-but-not-active ad_ids>
+                               → ambil status + creative untuk ad
+                                 yang spend tapi sudah dipause/archived
                                       │
                           1 sequential:
-                            E. debug_token (expiry check, non-blocking)
+                            F. debug_token (expiry check, non-blocking)
                                       │
                           merge & normalize (build_rows)
                                       │
@@ -151,7 +158,7 @@ Modal Cron (07:00 WIB × 15 brand) ────┤  Authorization: Bearer
                           JSON response → n8n → Supabase → Lovable
 ```
 
-### Alur Alert (Point 6)
+### Alur Alert
 
 ```
 Cron gagal >3 brand  ──┐
@@ -159,7 +166,7 @@ Cron gagal >3 brand  ──┐
 Token ≤7 hari/expired ─┘
 ```
 
-Jika `ALERT_WEBHOOK_URL` kosong, alert tetap di-log ke Modal console (tidak fail).
+Jika `ALERT_WEBHOOK_URL` kosong, alert tetap di-log ke `/var/log/cpas-meta-ads.log` (tidak fail).
 
 ## ⚠️ Metric Additivity — WAJIB DIBACA sebelum agregasi
 
@@ -213,7 +220,7 @@ group by brand_id, campaign_id, campaign_name, date_start;
 
 ## Downstream Audit Checklist (n8n + Supabase + Lovable)
 
-Karena sistem melalui chain `Modal → n8n → Supabase → Lovable`, setelah
+Karena sistem melalui chain `VPS (FastAPI) → n8n → Supabase → Lovable`, setelah
 perubahan schema (tambah `_hierarchy_ok`, nilai baru `OK_NO_META`), tiap
 komponen perlu diverifikasi manual. Saya tidak bisa audit otomatis dari repo
 ini, tapi checklist di bawah bisa dipakai.

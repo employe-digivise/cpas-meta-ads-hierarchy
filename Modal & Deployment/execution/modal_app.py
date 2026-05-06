@@ -1,7 +1,7 @@
 """
-CPAS Meta Ads Backend — Modal Deployment
-=========================================
-Endpoint HTTP + Cron scheduler harian.
+CPAS Meta Ads Backend — VPS Deployment (FastAPI + APScheduler)
+==============================================================
+Endpoint HTTP + Cron scheduler harian (in-process via APScheduler).
 
 Endpoint: POST /fetch_meta_ads
   Input:  { "brand_name": "ATRIA" }
@@ -12,13 +12,22 @@ Endpoint: POST /fetch_meta_ads
 Cron: daily_fetch_all_brands
   Jadwal: 07:00 WIB (00:00 UTC) setiap hari
   Proses: Fetch semua 15 brand sequential → kirim ke webhook n8n
+
+Run lokal:
+  uvicorn modal_app:app --host 0.0.0.0 --port 9005
+
+Run via systemd (production VPS): lihat deploy/cpas-meta-ads.service
 """
 
-import modal
-from fastapi import Header, HTTPException
+import os
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Header, HTTPException
 
-app = modal.App("cpas-meta-ads")
-image = modal.Image.debian_slim().pip_install("httpx", "fastapi")
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 API_VERSION = "v21.0"
 
@@ -43,7 +52,7 @@ BRAND_MAP = {
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Shared Logic — dipakai oleh HTTP endpoint DAN cron function
+# Shared Logic — dipakai oleh HTTP endpoint DAN scheduler
 # ═══════════════════════════════════════════════════════════════════
 
 async def fetch_with_retry(client, url, max_retries=3):
@@ -223,6 +232,7 @@ async def fetch_all_data(account_id, access_token, date_start, date_end=None, is
                     access_token,
                 )
                 ads.extend(extra_ads)
+
         token_info = await get_token_expiry(client, access_token)
     return insights, adsets, ads, campaigns, token_info
 
@@ -435,128 +445,14 @@ def build_rows(brand_name, brand_id, date_start, insights, adsets, ads, campaign
 
 
 # ═══════════════════════════════════════════════════════════════════
-# HTTP Endpoint — dipanggil oleh n8n / external client
-# ═══════════════════════════════════════════════════════════════════
-
-@app.function(image=image, secrets=[modal.Secret.from_name("api-auth-token"), modal.Secret.from_name("meta-ads-token")], timeout=300)
-@modal.fastapi_endpoint(method="POST")
-async def fetch_meta_ads(data: dict, authorization: str = Header(...)):
-    import os
-    import asyncio
-    import re
-    from datetime import datetime, timezone, timedelta
-
-    # ── Auth ──────────────────────────────────────────────────
-    expected_token = os.environ.get("API_AUTH_TOKEN")
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-    if authorization.replace("Bearer ", "").strip() != expected_token:
-        raise HTTPException(status_code=403, detail="Invalid authentication token")
-
-    # ── Validasi brand ────────────────────────────────────────
-    brand_name = data.get("brand_name", "").strip().upper()
-    if brand_name not in BRAND_MAP:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Brand '{brand_name}' tidak ditemukan. Tersedia: " + ", ".join(BRAND_MAP.keys()),
-        )
-
-    brand_info = BRAND_MAP[brand_name]
-    account_id = brand_info["account_id"]
-    brand_id = brand_info["brand_id"]
-
-    # ── Tanggal ───────────────────────────────────────────────
-    # Support 3 mode:
-    #   1. date_start + date_end → range (misal 1 bulan penuh)
-    #   2. date → single day (backward compatible)
-    #   3. kosong → kemarin (default)
-    def _validate_date(value, field_name):
-        value = value.strip()
-        if not re.match(r"^\d{4}-\d{2}-\d{2}$", value):
-            raise HTTPException(status_code=400, detail=f"Format {field_name} tidak valid: '{value}'. Gunakan format YYYY-MM-DD (contoh: 2026-03-08)")
-        try:
-            return datetime.strptime(value, "%Y-%m-%d")
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Tanggal {field_name} tidak valid: '{value}'. Pastikan tanggal benar (contoh: 2026-03-08)")
-
-    date_start_raw = data.get("date_start")
-    date_end_raw = data.get("date_end")
-    date_raw = data.get("date")
-
-    if date_start_raw:
-        dt_start = _validate_date(date_start_raw, "date_start")
-        if date_end_raw:
-            dt_end = _validate_date(date_end_raw, "date_end")
-        else:
-            dt_end = dt_start
-        if dt_end < dt_start:
-            raise HTTPException(status_code=400, detail=f"date_end ({date_end_raw}) tidak boleh lebih awal dari date_start ({date_start_raw})")
-        if (dt_end - dt_start).days > 93:
-            raise HTTPException(status_code=400, detail="Range maksimal 93 hari (± 3 bulan) untuk menghindari timeout Meta API")
-        date_start = dt_start.strftime("%Y-%m-%d")
-        date_end = dt_end.strftime("%Y-%m-%d")
-    elif date_raw:
-        _validate_date(date_raw, "date")
-        date_start = date_raw.strip()
-        date_end = date_start
-    else:
-        jakarta_tz = timezone(timedelta(hours=7))
-        date_start = (datetime.now(jakarta_tz) - timedelta(days=1)).strftime("%Y-%m-%d")
-        date_end = date_start
-
-    # ── Fetch & build ─────────────────────────────────────────
-    is_range = (date_start != date_end)
-    access_token = os.environ.get("META_ACCESS_TOKEN")
-    try:
-        insights, adsets, ads, campaigns, token_info = await asyncio.to_thread(
-            asyncio.run, fetch_all_data(account_id, access_token, date_start, date_end, is_range=is_range)
-        )
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
-
-    # ── Token warning ─────────────────────────────────────────
-    days_left = token_info.get("days_left")
-    token_warning = None
-    if days_left is not None:
-        if days_left <= 0:
-            token_warning = f"TOKEN EXPIRED sejak {token_info.get('expires_on')}. Jalankan rotate_token.py segera!"
-        elif days_left <= 14:
-            token_warning = f"Token Meta expired {days_left} hari lagi ({token_info.get('expires_on')}). Segera jalankan rotate_token.py"
-
-    rows = build_rows(brand_name, brand_id, date_start, insights, adsets, ads, campaigns, date_end, is_range=is_range)
-    total_ok = sum(1 for r in rows if r["status"] == "OK")
-
-    return {
-        "success": True,
-        "brand": brand_name,
-        "brand_id": brand_id,
-        "date_start": date_start,
-        "date_end": date_end,
-        "level": "campaign" if is_range else "ad",
-        "total_campaigns" if is_range else "total_ads": len(rows),
-        "total_with_insight": total_ok,
-        "total_no_insight": len(rows) - total_ok,
-        "token_days_left": days_left,
-        "token_expires_on": token_info.get("expires_on"),
-        "token_warning": token_warning,
-        "data": rows,
-    }
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Cron — fetch semua brand setiap hari 07:00 WIB → kirim ke webhook
+# Alerting
 # ═══════════════════════════════════════════════════════════════════
 
 async def _send_alert(message: str, context: dict | None = None):
     """Kirim alert ke ALERT_WEBHOOK_URL (Slack incoming webhook, Discord, atau
     generic webhook). Silent fail kalau env var tidak di-set atau request gagal
     — alert tidak boleh menggagalkan cron utama.
-
-    Threshold disarankan:
-      - cron fail > 3 brand (parsial failure dihandle retry 4x per brand)
-      - token Meta expired atau <= 7 hari
     """
-    import os
     import httpx
 
     webhook_url = os.environ.get("ALERT_WEBHOOK_URL")
@@ -577,18 +473,11 @@ async def _send_alert(message: str, context: dict | None = None):
         print(f"[ALERT] Failed to send alert: {e}")
 
 
-@app.function(
-    image=image,
-    secrets=[
-        modal.Secret.from_name("meta-ads-token"),
-        modal.Secret.from_name("n8n-webhook-url"),
-        modal.Secret.from_name("alert-webhook-url"),
-    ],
-    timeout=1800,
-    schedule=modal.Cron("0 0 * * *"),  # 00:00 UTC = 07:00 WIB
-)
+# ═══════════════════════════════════════════════════════════════════
+# Cron job — fetch semua brand setiap hari 07:00 WIB → kirim ke webhook
+# ═══════════════════════════════════════════════════════════════════
+
 async def daily_fetch_all_brands():
-    import os
     import asyncio
     import httpx
     import time
@@ -612,11 +501,10 @@ async def daily_fetch_all_brands():
         success = False
         error_msg = None
 
-        # 4 attempts: 1 awal + 3 retry
         for attempt in range(4):
             try:
                 if attempt > 0:
-                    wait = 30 + (attempt * 10)  # 40s, 50s, 60s
+                    wait = 30 + (attempt * 10)
                     print(f"[CRON] {brand_name}: retry {attempt}/3, waiting {wait}s...")
                     await asyncio.sleep(wait)
 
@@ -640,7 +528,6 @@ async def daily_fetch_all_brands():
                     "data": rows,
                 }
 
-                # Kirim ke webhook n8n
                 async with httpx.AsyncClient() as client:
                     resp = await client.post(webhook_url, json=payload, timeout=60.0)
                     if resp.status_code >= 400:
@@ -679,11 +566,6 @@ async def daily_fetch_all_brands():
     print(f"[CRON] ================================\n")
 
     # ── Alerting ──────────────────────────────────────────────
-    # Kirim alert hanya kalau ada kondisi yang layak di-escalate.
-    # Threshold dipilih agar on-call tidak kebanjiran notifikasi:
-    #   - Cron fail: minimal 3 brand gagal (1-2 brand kadang hanya rate limit
-    #     transient yang sudah dihandle retry 4x)
-    #   - Token: <=7 hari atau expired
     failed_brands = [r["brand"] for r in results_summary if not r["success"]]
     days_left = token_info_last.get("days_left")
     expires_on = token_info_last.get("expires_on")
@@ -695,7 +577,6 @@ async def daily_fetch_all_brands():
             context={"date": date_str, "failed_brands": failed_brands},
         )
     elif failed >= 1:
-        # Tidak page on-call, tapi log jelas agar kelihatan di Modal dashboard
         print(f"[CRON] WARN: {failed} brand gagal tapi di bawah threshold alert ({failed_brands})")
 
     if days_left is not None:
@@ -722,3 +603,147 @@ async def daily_fetch_all_brands():
         "token_expires_on": expires_on,
         "details": results_summary,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# FastAPI App + APScheduler (in-process cron) — VPS deployment
+# ═══════════════════════════════════════════════════════════════════
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.cron import CronTrigger
+
+    scheduler = AsyncIOScheduler(timezone="UTC")
+    # 00:00 UTC = 07:00 WIB — sama dengan jadwal Modal sebelumnya
+    scheduler.add_job(
+        daily_fetch_all_brands,
+        CronTrigger(hour=0, minute=0, timezone="UTC"),
+        id="daily_fetch_all_brands",
+        misfire_grace_time=3600,
+        coalesce=True,
+        max_instances=1,
+    )
+    scheduler.start()
+    print(f"[STARTUP] APScheduler started: daily_fetch_all_brands @ 00:00 UTC (07:00 WIB)")
+    try:
+        yield
+    finally:
+        scheduler.shutdown(wait=False)
+        print("[SHUTDOWN] APScheduler stopped")
+
+
+app = FastAPI(title="CPAS Meta Ads Backend", lifespan=lifespan)
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+@app.post("/fetch_meta_ads")
+async def fetch_meta_ads(data: dict, authorization: str = Header(...)):
+    import re
+    from datetime import datetime, timezone, timedelta
+
+    # ── Auth ──────────────────────────────────────────────────
+    expected_token = os.environ.get("API_AUTH_TOKEN")
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    if authorization.replace("Bearer ", "").strip() != expected_token:
+        raise HTTPException(status_code=403, detail="Invalid authentication token")
+
+    # ── Validasi brand ────────────────────────────────────────
+    brand_name = data.get("brand_name", "").strip().upper()
+    if brand_name not in BRAND_MAP:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Brand '{brand_name}' tidak ditemukan. Tersedia: " + ", ".join(BRAND_MAP.keys()),
+        )
+
+    brand_info = BRAND_MAP[brand_name]
+    account_id = brand_info["account_id"]
+    brand_id = brand_info["brand_id"]
+
+    # ── Tanggal ───────────────────────────────────────────────
+    def _validate_date(value, field_name):
+        value = value.strip()
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", value):
+            raise HTTPException(status_code=400, detail=f"Format {field_name} tidak valid: '{value}'. Gunakan format YYYY-MM-DD (contoh: 2026-03-08)")
+        try:
+            return datetime.strptime(value, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Tanggal {field_name} tidak valid: '{value}'. Pastikan tanggal benar (contoh: 2026-03-08)")
+
+    date_start_raw = data.get("date_start")
+    date_end_raw = data.get("date_end")
+    date_raw = data.get("date")
+
+    if date_start_raw:
+        dt_start = _validate_date(date_start_raw, "date_start")
+        if date_end_raw:
+            dt_end = _validate_date(date_end_raw, "date_end")
+        else:
+            dt_end = dt_start
+        if dt_end < dt_start:
+            raise HTTPException(status_code=400, detail=f"date_end ({date_end_raw}) tidak boleh lebih awal dari date_start ({date_start_raw})")
+        if (dt_end - dt_start).days > 93:
+            raise HTTPException(status_code=400, detail="Range maksimal 93 hari (± 3 bulan) untuk menghindari timeout Meta API")
+        date_start = dt_start.strftime("%Y-%m-%d")
+        date_end = dt_end.strftime("%Y-%m-%d")
+    elif date_raw:
+        _validate_date(date_raw, "date")
+        date_start = date_raw.strip()
+        date_end = date_start
+    else:
+        jakarta_tz = timezone(timedelta(hours=7))
+        date_start = (datetime.now(jakarta_tz) - timedelta(days=1)).strftime("%Y-%m-%d")
+        date_end = date_start
+
+    # ── Fetch & build ─────────────────────────────────────────
+    is_range = (date_start != date_end)
+    access_token = os.environ.get("META_ACCESS_TOKEN")
+    try:
+        insights, adsets, ads, campaigns, token_info = await fetch_all_data(
+            account_id, access_token, date_start, date_end, is_range=is_range
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    # ── Token warning ─────────────────────────────────────────
+    days_left = token_info.get("days_left")
+    token_warning = None
+    if days_left is not None:
+        if days_left <= 0:
+            token_warning = f"TOKEN EXPIRED sejak {token_info.get('expires_on')}. Jalankan rotate_token.py segera!"
+        elif days_left <= 14:
+            token_warning = f"Token Meta expired {days_left} hari lagi ({token_info.get('expires_on')}). Segera jalankan rotate_token.py"
+
+    rows = build_rows(brand_name, brand_id, date_start, insights, adsets, ads, campaigns, date_end, is_range=is_range)
+    total_ok = sum(1 for r in rows if r["status"] == "OK")
+
+    return {
+        "success": True,
+        "brand": brand_name,
+        "brand_id": brand_id,
+        "date_start": date_start,
+        "date_end": date_end,
+        "level": "campaign" if is_range else "ad",
+        "total_campaigns" if is_range else "total_ads": len(rows),
+        "total_with_insight": total_ok,
+        "total_no_insight": len(rows) - total_ok,
+        "token_days_left": days_left,
+        "token_expires_on": token_info.get("expires_on"),
+        "token_warning": token_warning,
+        "data": rows,
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "modal_app:app",
+        host=os.environ.get("HOST", "0.0.0.0"),
+        port=int(os.environ.get("PORT", "9005")),
+        log_level="info",
+    )

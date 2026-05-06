@@ -19,31 +19,34 @@ Sebelum menjalankan script, generate long-lived token baru:
 
 ## Jalankan Rotasi
 
+### Local (laptop)
 ```bash
-cd "Modal & Deployment"
-python3 execution/rotate_token.py <TOKEN_BARU>
+python "Modal & Deployment/execution/rotate_token.py" <TOKEN_BARU>
+```
+Ini hanya update `.env` lokal. Untuk update VPS, lihat di bawah.
+
+### Di VPS (production — otomatis restart service)
+```bash
+ssh root@31.97.222.83
+cd /root/digivise/cpas-meta-ads
+.venv/bin/python "Modal & Deployment/execution/rotate_token.py" <TOKEN_BARU>
 ```
 
 Script otomatis:
-1. Update `META_ACCESS_TOKEN` di `.venv/pyvenv.cfg`
-2. Sync secret baru ke Modal (`meta-ads-token`)
+1. Update `META_ACCESS_TOKEN` di `/root/digivise/cpas-meta-ads/.env`
+2. Restart `cpas-meta-ads` systemd service
 
 ## Verifikasi Setelah Rotasi
 
 ```bash
 # Cek token baru valid
-python3 execution/check_token.py
+python "Modal & Deployment/execution/check_token.py"
 
 # Test endpoint dengan token baru
-python3 execution/test_endpoint.py ATRIA
-```
+python "Modal & Deployment/execution/test_endpoint.py" ATRIA
 
-## Redeploy Setelah Rotasi
-
-Token baru otomatis aktif di Modal setelah `rotate_token.py` (tidak perlu redeploy). Namun jika ada perubahan lain di `modal_app.py`, jalankan deploy juga:
-
-```bash
-python3 execution/deploy.py
+# Cek service di VPS jalan
+curl http://31.97.222.83:9005/health
 ```
 
 ## Catatan
@@ -51,3 +54,4 @@ python3 execution/deploy.py
 - Token Meta berlaku ~60 hari dari tanggal generate
 - Set reminder 50 hari setelah rotasi untuk rotasi berikutnya
 - Field `token_expires_on` di response endpoint menunjukkan tanggal expired aktual
+- Setelah rotate di VPS, cron harian otomatis pakai token baru (tidak perlu redeploy)

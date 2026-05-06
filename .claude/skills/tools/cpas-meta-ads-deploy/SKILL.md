@@ -1,55 +1,71 @@
 ---
 name: cpas-meta-ads-deploy
-description: Deploy atau redeploy backend CPAS Meta Ads ke Modal. Gunakan saat ada perubahan di modal_app.py, update brand map, atau perlu sync secrets.
+description: Deploy atau redeploy backend CPAS Meta Ads ke VPS. Gunakan saat ada perubahan di modal_app.py, update brand map, atau perlu sync .env baru.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Bash
 ---
 
-# SOP — Deploy CPAS Meta Ads ke Modal
+# SOP — Deploy CPAS Meta Ads ke VPS
+
+Project ini berjalan di VPS `31.97.222.83` port `9005` (FastAPI/uvicorn + APScheduler).
+Tidak lagi pakai Modal.
 
 ## Lokasi File
+
 ```
 cpas_meta_ads_hierarchy/
-└── Modal & Deployment/
-    ├── .venv/pyvenv.cfg          ← credentials (MODAL_TOKEN, META_TOKEN, dll)
-    └── execution/
-        ├── modal_app.py          ← kode utama endpoint
-        ├── config_loader.py      ← loader credentials
-        └── deploy.py             ← script deploy otomatis
+├── .env                                       ← credentials (lokal saja, tidak di-commit)
+└── Modal & Deployment/execution/
+    ├── modal_app.py                           ← FastAPI app
+    ├── requirements.txt                       ← runtime deps
+    └── deploy/
+        ├── install.sh                         ← first-time install di VPS
+        ├── update.sh                          ← pull + restart (after commit)
+        └── cpas-meta-ads.service              ← systemd unit
 ```
 
-## Cara Deploy (Gunakan Script)
+VPS path: `/root/digivise/cpas-meta-ads/` (clone dari GitHub).
 
+## Cara Deploy
+
+### Update setelah commit baru (umum)
 ```bash
-cd "Modal & Deployment"
-python3 execution/deploy.py
+ssh root@31.97.222.83
+bash /root/digivise/cpas-meta-ads/Modal\ \&\ Deployment/execution/deploy/update.sh
 ```
 
-Script ini otomatis:
-1. Load config dari `.venv/pyvenv.cfg`
-2. Verifikasi modal CLI tersedia
-3. Sync secrets ke Modal (`meta-ads-token`, `api-auth-token`, `n8n-webhook-url`, `alert-webhook-url`)
-4. Deploy `modal_app.py`
+### First-time install
+```bash
+ssh root@31.97.222.83
+mkdir -p /tmp/cpas-install && cd /tmp/cpas-install
+curl -sO https://raw.githubusercontent.com/employe-digivise/cpas-meta-ads-hierarchy/main/Modal%20%26%20Deployment/execution/deploy/install.sh
+bash install.sh
+
+# Setup .env (sekali saja)
+cp "/root/digivise/cpas-meta-ads/Modal & Deployment/execution/.env.example" /root/digivise/cpas-meta-ads/.env
+nano /root/digivise/cpas-meta-ads/.env
+systemctl restart cpas-meta-ads
+```
 
 ## Endpoint Aktif
 
 ```
-POST https://aliefianislami--cpas-meta-ads-fetch-meta-ads.modal.run
+POST http://31.97.222.83:9005/fetch_meta_ads
 Authorization: Bearer <API_AUTH_TOKEN>
 Content-Type: application/json
 
 Body: { "brand_name": "ATRIA" }
-      { "brand_name": "ATRIA", "date": "2026-03-04" }  ← optional date
-```
+      { "brand_name": "ATRIA", "date_start": "2026-02-01", "date_end": "2026-02-28" }
 
-URL tidak berubah selama nama app (`cpas-meta-ads`) dan nama fungsi (`fetch_meta_ads`) tidak diubah.
+Health: GET http://31.97.222.83:9005/health
+```
 
 ## Cara Tambah / Edit Brand
 
-Edit `brand_map` di `Modal & Deployment/execution/modal_app.py`:
+Edit `BRAND_MAP` di `Modal & Deployment/execution/modal_app.py`:
 
 ```python
-brand_map = {
+BRAND_MAP = {
     "NAMA_BRAND": {
         "account_id": "act_XXXXXXXXXX",
         "brand_id": "uuid-brand-id-dari-supabase"
@@ -57,73 +73,79 @@ brand_map = {
 }
 ```
 
-Setelah edit → **wajib redeploy** via `python3 execution/deploy.py`.
+Setelah edit → commit + push, lalu di VPS jalankan `update.sh`.
 
-## Secrets di Modal
+## Environment Variables (di `.env` VPS)
 
-| Modal Secret Name     | Env Variable          | Keterangan                                          |
-|-----------------------|-----------------------|-----------------------------------------------------|
-| `api-auth-token`      | `API_AUTH_TOKEN`      | Bearer token untuk auth endpoint Modal              |
-| `meta-ads-token`      | `META_ACCESS_TOKEN`   | Meta Graph API access token                         |
-| `n8n-webhook-url`     | `N8N_WEBHOOK_URL`     | Target webhook cron harian (15 brand → n8n)         |
-| `alert-webhook-url`   | `ALERT_WEBHOOK_URL`   | Target alert Slack/Discord/generic (opsional — boleh kosong, alert akan di-log saja) |
+| Key | Keterangan |
+|-----|-----------|
+| `API_AUTH_TOKEN` | Bearer token untuk endpoint |
+| `META_ACCESS_TOKEN` | Meta Graph API access token |
+| `N8N_WEBHOOK_URL` | Target webhook cron harian |
+| `ALERT_WEBHOOK_URL` | Target alert (opsional, boleh kosong) |
+| `HOST` / `PORT` | Default `0.0.0.0` / `9005` |
 
-Secrets di-sync otomatis saat deploy. Update manual jika diperlukan:
-```bash
-modal secret create --force meta-ads-token META_ACCESS_TOKEN="TOKEN_BARU"
-modal secret create --force alert-webhook-url ALERT_WEBHOOK_URL="https://hooks.slack.com/..."
-```
+systemd `EnvironmentFile=/root/digivise/cpas-meta-ads/.env` — load otomatis saat service start.
 
-## Call API yang Dilakukan (4 Parallel + 1 Sequential)
+## Strategi Fetch (sekarang)
 
 ```
-4 parallel (Promise.all):
-  A. /{account_id}/insights?level=ad   ← metrics + CPAS (semua ads yang serve)
-  B. /{account_id}/adsets              ← objective lookup
-  C. /{account_id}/ads?status=ACTIVE   ← status + creative (hanya ACTIVE)
-  D. /{account_id}/campaigns           ← campaign names (fallback utk NO_INSIGHT)
+1. /{account_id}/insights?level=ad           ← daftar ad_id yang punya spend
+2 (parallel):
+   /{account_id}/adsets                       ← + effective_status
+   /{account_id}/ads?status=ACTIVE            ← currently active (untuk NO_INSIGHT row)
+   /{account_id}/campaigns                    ← + effective_status
 
-Sequential setelah batch di atas:
-  E. debug_token                        ← cek expiry token (non-blocking)
+3. Diff: (ad_id di insights) - (ad_id di /ads ACTIVE) = ads yang spent-but-paused
+   → batch fetch metadata via /v21.0/?ids=<csv> (TANPA filter status)
+   → ads list lengkap + creative + status real
 ```
 
-⚠️ **Call C filter `effective_status=ACTIVE`** menyebabkan ads yang PAUSED/ARCHIVED
-tidak masuk ke `ads_map`, sehingga insight dari ads tersebut akan muncul dengan
-`status = "OK_NO_META"`, `_status = "UNKNOWN"`, dan thumbnail null. Ini penyebab
-status mismatch yang sering dilaporkan vs dashboard Meta Ads Manager.
+Setiap row carry `_status`, `_adset_status`, `_campaign_status` (dari `effective_status`).
 
-## Setelah Deploy — Verifikasi
+## Verifikasi Setelah Deploy
 
 ```bash
-cd "Modal & Deployment"
-python3 execution/test_endpoint.py ATRIA
+# Health check
+curl http://31.97.222.83:9005/health
+
+# Smoke test 1 brand
+python "Modal & Deployment/execution/test_endpoint.py" ATRIA
+
+# Live log
+ssh root@31.97.222.83 "journalctl -u cpas-meta-ads -f"
 ```
-
-Atau lihat response field `token_warning` — jika ada isinya, token perlu segera dirotasi.
-
-## Token Management
-
-- **Cek expiry**: gunakan `/cpas-meta-ads-check-token`
-- **Rotasi token**: gunakan `/cpas-meta-ads-rotate-token`
 
 ## Troubleshooting
 
+### Service gagal start
+```bash
+ssh root@31.97.222.83 "systemctl status cpas-meta-ads && journalctl -u cpas-meta-ads -n 50"
+```
+
 ### Meta API Error (190): token expired
 ```bash
-cd "Modal & Deployment"
-python3 execution/rotate_token.py <TOKEN_BARU>
+ssh root@31.97.222.83
+cd /root/digivise/cpas-meta-ads
+.venv/bin/python "Modal & Deployment/execution/rotate_token.py" <TOKEN_BARU>
 ```
 
 ### HTTP 401 dari endpoint
-Cek header: `Authorization: Bearer <API_AUTH_TOKEN>`
-Nilai token ada di `.venv/pyvenv.cfg` key `API_AUTH_TOKEN`.
+Cek header: `Authorization: Bearer <API_AUTH_TOKEN>` cocok dengan `API_AUTH_TOKEN` di `.env` VPS.
 
-### Endpoint tidak merespons
-```bash
-modal app list
-modal app logs cpas-meta-ads
-```
+### Cron tidak jalan
+APScheduler in-process — kalau service mati, cron juga mati. Pastikan
+`systemctl is-active cpas-meta-ads` = `active`.
+
+### Port collision
+WhatsApp service sudah pakai 9004. CPAS pakai 9005. Kalau perlu ganti port,
+edit `cpas-meta-ads.service` + `.env` (PORT) lalu `systemctl daemon-reload && systemctl restart cpas-meta-ads`.
 
 ### Brand tidak ditemukan (HTTP 400)
-`brand_name` harus cocok dengan key di `brand_map` (akan di-uppercase otomatis).
+`brand_name` harus cocok dengan key di `BRAND_MAP` (akan di-uppercase otomatis).
 Contoh benar: `"GOODS A FOOTWEAR"` bukan `"Goods A Footwear"`.
+
+## Token Management
+
+- **Cek expiry**: `/cpas-meta-ads-check-token`
+- **Rotasi token**: `/cpas-meta-ads-rotate-token`

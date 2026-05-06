@@ -42,9 +42,10 @@ def main() -> None:
     date_label = f"{date_start} → {date_end}" if date_end else date_start
     print(f"[1/3] Config  : brand={brand}, date={date_label}")
     cfg = load_config()
-    require(cfg, "MODAL_ENDPOINT_URL", "API_AUTH_TOKEN")
+    require(cfg, "API_AUTH_TOKEN")
 
-    url   = cfg["MODAL_ENDPOINT_URL"]
+    # Endpoint default: VPS. Override via CPAS_ENDPOINT di .env kalau test ke instance lain.
+    url   = cfg.get("CPAS_ENDPOINT", "http://31.97.222.83:9005/fetch_meta_ads")
     token = cfg["API_AUTH_TOKEN"]
 
     # ── Step 2: Request ──────────────────────────────────────

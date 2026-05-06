@@ -1,9 +1,9 @@
 """Shared pytest fixtures + stubs.
 
-modal_app.py mengimport `modal` dan `fastapi` di module level untuk mendefinisikan
-App + decorator endpoint. Di environment CI/lokal tanpa Modal SDK terinstall,
-kita stub keduanya dengan MagicMock agar test bisa mengimport modul tanpa
-menjalankan Modal. Stub dipasang SEBELUM import modal_app di file test.
+modal_app.py mengimport `fastapi`, `apscheduler`, dan opsional `dotenv` di
+module level. Di environment CI/lokal tanpa package terinstall, kita stub
+mereka dengan MagicMock agar test bisa mengimport modul tanpa runtime
+dependency. Stub dipasang SEBELUM import modal_app di file test.
 """
 import sys
 from pathlib import Path
@@ -16,10 +16,13 @@ EXECUTION_DIR = Path(__file__).resolve().parent.parent
 if str(EXECUTION_DIR) not in sys.path:
     sys.path.insert(0, str(EXECUTION_DIR))
 
-# Stub modal + fastapi sebelum test manapun mengimport modal_app
-sys.modules.setdefault("modal", MagicMock(name="modal"))
-_fastapi_stub = MagicMock(name="fastapi")
-sys.modules.setdefault("fastapi", _fastapi_stub)
+# Stub runtime deps sebelum test manapun mengimport modal_app
+sys.modules.setdefault("fastapi", MagicMock(name="fastapi"))
+sys.modules.setdefault("apscheduler", MagicMock(name="apscheduler"))
+sys.modules.setdefault("apscheduler.schedulers", MagicMock(name="apscheduler.schedulers"))
+sys.modules.setdefault("apscheduler.schedulers.asyncio", MagicMock(name="apscheduler.schedulers.asyncio"))
+sys.modules.setdefault("apscheduler.triggers", MagicMock(name="apscheduler.triggers"))
+sys.modules.setdefault("apscheduler.triggers.cron", MagicMock(name="apscheduler.triggers.cron"))
 
 
 # ── Fixtures builder (mirror dari backend/tests/normalizer.test.ts) ────────

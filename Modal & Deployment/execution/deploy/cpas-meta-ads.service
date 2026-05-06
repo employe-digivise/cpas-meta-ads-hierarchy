@@ -1,0 +1,17 @@
+[Unit]
+Description=CPAS Meta Ads Backend (FastAPI + APScheduler)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/digivise/cpas-meta-ads
+EnvironmentFile=/root/digivise/cpas-meta-ads/.env
+ExecStart=/root/digivise/cpas-meta-ads/.venv/bin/uvicorn modal_app:app --host 0.0.0.0 --port 9005 --workers 1
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/cpas-meta-ads.log
+StandardError=append:/var/log/cpas-meta-ads.log
+
+[Install]
+WantedBy=multi-user.target

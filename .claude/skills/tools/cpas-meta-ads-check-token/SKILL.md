@@ -10,8 +10,11 @@ allowed-tools: Bash
 ## Jalankan
 
 ```bash
-cd "Modal & Deployment"
-python3 execution/check_token.py
+# Local
+python "Modal & Deployment/execution/check_token.py"
+
+# Di VPS
+ssh root@31.97.222.83 "cd /root/digivise/cpas-meta-ads && .venv/bin/python 'Modal & Deployment/execution/check_token.py'"
 ```
 
 ## Interpretasi Hasil
